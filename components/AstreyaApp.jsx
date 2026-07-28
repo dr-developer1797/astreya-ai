@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 import Image from "next/image";
 
 const FONT_IMPORT = `
@@ -27,19 +27,11 @@ const C = {
 };
 const F = { serif:"'Cormorant Garamond',serif", sans:"'Outfit',sans-serif" };
 
-const LLM_CONFIG = {
-  mode: "local",                          // "openrouter" | "local"
-  openrouterKey: process.env.OPENROUTER_API_KEY,                           // paste OpenRouter key here
-  openrouterModel: "google/gemma-4-31b-it:free",
-  localEndpoint: undefined,               // set by LMSTUDIO_ENDPOINT on the server, see /api/chat
-  localModel: "google/gemma-4-e4b",            // must match an id from GET /v1/models
-};
-
+// Raising this does not buy a longer document: the model's hidden thought step expands to
+// fill whatever budget it is given (at 2400 it ran ~43s before any text appeared, versus
+// ~31s at 2000, and no run of nine reached a signature block), and 2400 tokens already
+// takes ~53s of generation against the 60s function ceiling.
 const MAX_TOKENS = 2000;
-
-// Reasoning models bill their hidden thinking against max_tokens, which starves the
-// visible answer and truncates it mid-sentence. "none" spends the budget on the answer.
-const REASONING_EFFORT = "none";
 
 // Turns a non-2xx response into a message that names the actual failure.
 async function describeFailure(res) {
@@ -59,55 +51,22 @@ async function describeFailure(res) {
 }
 
 async function callLLM({ sys, messages, stream = true }) {
-  const local = LLM_CONFIG.mode === "local";
-  const model = local ? LLM_CONFIG.localModel : LLM_CONFIG.openrouterModel;
-
-  let url, init;
-  if (local) {
-    url = "/api/chat";
-    init = {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        endpoint: LLM_CONFIG.localEndpoint,
-        model,
-        messages,
-        sys,
-        stream,
-        max_tokens: MAX_TOKENS,
-        reasoning_effort: REASONING_EFFORT,
-      }),
-    };
-  } else {
-    url = "https://openrouter.ai/api/v1/chat/completions";
-    init = {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${LLM_CONFIG.openrouterKey}`,
-        "HTTP-Referer": "https://github.com/veerjkamdar/astreya",
-        "X-Title": "Astreya",
-      },
-      body: JSON.stringify({
-        model,
-        max_tokens: MAX_TOKENS,
-        stream,
-        messages: sys
-          ? [{ role: "system", content: sys }, ...messages]
-          : messages,
-      }),
-    };
-  }
+  const init = {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      messages,
+      sys,
+      stream,
+      max_tokens: MAX_TOKENS,
+    }),
+  };
 
   let res;
   try {
-    res = await fetch(url, init);
+    res = await fetch("/api/chat", init);
   } catch {
-    throw new Error(
-      local
-        ? "Could not reach the Astreya server at /api/chat — check the dev server is still running, then reload the page"
-        : "Network request to OpenRouter failed — check your internet connection",
-    );
+    throw new Error("Could not reach the Astreya Gemma API — check the deployment and try again");
   }
   if (!res.ok) throw new Error(await describeFailure(res));
   return res;
@@ -331,26 +290,6 @@ WITNESSES:
 
 /* ── RESEARCH STATIC DATA ── */
 const SAMPLE_Q = "Can an FIR be quashed by the High Court under Section 482 CrPC?";
-const SAMPLE_R = [
-  { t:"p",    v:"Yes. A High Court holds inherent power to quash an FIR under Section 482, Code of Criminal Procedure, 1973 (now Section 528, BNSS 2023). This power is discretionary and must be exercised sparingly to prevent abuse of process or to secure the ends of justice." },
-  { t:"head", v:"Governing Legal Framework" },
-  { t:"cite", law:"Section 482, CrPC 1973",           note:"Inherent powers of High Court" },
-  { t:"cite", law:"Section 528, BNSS 2023",            note:"Equivalent provision, new criminal code" },
-  { t:"cite", law:"Article 226, Constitution of India",note:"Alternative — writ jurisdiction" },
-  { t:"head", v:"Seven Grounds — Bhajan Lal Categories" },
-  { t:"list", items:["Allegations do not constitute a cognisable offence even taken at face value","Allegations are manifestly absurd or inherently impossible","The offence is not cognisable — police had no authority to investigate","Prosecution manifestly attended with mala fide intent","Proceeding filed to wreak vengeance or settle private scores","Continuing the proceeding would be abuse of process of court","Legal bar exists against initiation or continuance of proceeding"] },
-  { t:"case", citation:"State of Haryana v. Bhajan Lal",                   ref:"1992 Supp (1) SCC 335", note:"Definitive 7-category test" },
-  { t:"case", citation:"Neeharika Infrastructure v. State of Maharashtra", ref:"(2021) 19 SCC 401",     note:"3-judge bench reaffirmation" },
-  { t:"case", citation:"Pepsi Foods Ltd. v. Special Judicial Magistrate",  ref:"(1998) 5 SCC 749",      note:"Civil dispute — quashing upheld" },
-];
-const SOURCES = [
-  { id:1, title:"State of Haryana v. Bhajan Lal",               citation:"1992 Supp (1) SCC 335",  court:"SC", bench:"3J", year:1992, score:97, type:"case"    },
-  { id:2, title:"Neeharika Infrastructure v. State of Maha.",   citation:"(2021) 19 SCC 401",       court:"SC", bench:"3J", year:2021, score:94, type:"case"    },
-  { id:3, title:"Section 482, CrPC 1973",                       citation:"Cr.P.C. §482",            court:"—",  bench:"—",  year:1973, score:99, type:"statute" },
-  { id:4, title:"Section 528, BNSS 2023",                       citation:"BNSS §528",               court:"—",  bench:"—",  year:2023, score:98, type:"statute" },
-  { id:5, title:"Pepsi Foods v. Special Judicial Magistrate",   citation:"(1998) 5 SCC 749",        court:"SC", bench:"2J", year:1998, score:88, type:"case"    },
-  { id:6, title:"Medchl Chemicals v. Biological E Ltd.",        citation:"(2000) 3 SCC 269",        court:"SC", bench:"2J", year:2000, score:82, type:"case"    },
-];
 
 /* ── TINY COMPONENTS ── */
 const Spinner = () => <div style={{width:13,height:13,border:`2px solid ${C.border}`,borderTop:`2px solid ${C.red}`,borderRadius:"50%",animation:"spin 0.7s linear infinite"}}/>;
@@ -540,21 +479,6 @@ function ExportModal({ defaultName, content, title, onClose }) {
   );
 }
 
-/* ── INDIAN KANOON ── */
-const IK_TOKEN = process.env.IndiaKanoon_API_KEY;
-const IK_BASE  = "https://api.indiankanoon.org";
-
-async function ikSearch(query, pagenum = 0) {
-  const body = new URLSearchParams({ formInput: query, pagenum });
-  const res = await fetch(`${IK_BASE}/search/`, {
-    method: "POST",
-    headers: { "Authorization": `Token ${IK_TOKEN}`, "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString(),
-  });
-  if (!res.ok) throw new Error(`IndianKanoon ${res.status}`);
-  return res.json();
-}
-
 /* ── RESEARCH SYSTEM PROMPT ── */
 const RESEARCH_SYSTEM = `You are Astreya, an expert AI legal assistant specialising exclusively in Indian law. You help Indian lawyers, law firms, and researchers with precise, well-cited legal analysis.
 
@@ -596,11 +520,10 @@ function ResearchView() {
     let ikDocs = [];
     setIkLoading(true);
     try {
-      const body = new URLSearchParams({ formInput:q, pagenum:0 });
-      const ikRes = await fetch(`${IK_BASE}/search/`, {
+      const ikRes = await fetch("/api/legal-search", {
         method:"POST",
-        headers:{ "Authorization":`Token ${IK_TOKEN}`, "Content-Type":"application/x-www-form-urlencoded" },
-        body: body.toString(),
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({ query:q, page:0 }),
       });
       if (!ikRes.ok) throw new Error(`IK ${ikRes.status}`);
       const ikJson = await ikRes.json();
@@ -867,7 +790,8 @@ function DraftingView() {
   const editorWrap = useRef(null);
 
   const dtInfo  = DOC_TYPES.find(d=>d.id===docType);
-  const fields  = docType ? (INTAKE[docType] || INTAKE.nda) : [];
+  // Memoised so the identity stays stable across renders; generate() depends on it.
+  const fields  = useMemo(() => (docType ? (INTAKE[docType] || INTAKE.nda) : []), [docType]);
   const filled  = fields.filter(f=>form[f.key]?.trim()).length;
   const pct     = fields.length ? Math.round((filled/fields.length)*100) : 0;
 
@@ -880,7 +804,13 @@ function DraftingView() {
     const label  = dtInfo?.label || docType;
     const flist  = fields.map(f=>`${f.label}: ${form[f.key]||"[not provided]"}`).join("\n");
     const notesSection = notes.trim() ? `\n\nADDITIONAL INSTRUCTIONS FROM USER:\n${notes.trim()}` : "";
-    const sys = `You are a senior Indian lawyer with 20+ years drafting commercial agreements. Produce a COMPLETE, professional, execution-ready ${label} under Indian law. Rules: numbered clauses (1., 1.1, 1.2…), include recitals, definitions, operative clauses, general provisions, schedules if needed, and a signature block. Reference applicable Indian statutes inside relevant clauses. Output ONLY the document — no preamble, no commentary.`;
+    // Markdown is banned because the editor renders this text verbatim, so asterisks and
+    // hashes would show up literally. Keep this prompt terse: the model emits a hidden
+    // thought step that is billed against the same MAX_TOKENS budget as the document, and
+    // measurements show elaborate prompts (word caps, clause inventories, "do not
+    // deliberate" directives) all make it deliberate longer and finish less often. A short
+    // instruction plus a short target document is what actually reaches the signature block.
+    const sys = `Draft a complete, execution-ready ${label} under Indian law. Plain text only — no markdown, no asterisks, no hash headings. Numbered clauses, one short paragraph each. Always reach the signature block for both parties. Output only the document.`;
     const usr = `Draft a complete ${label} using these details:\n\n${flist}${notesSection}`;
     try {
       const res = await callLLM({ sys, messages:[{role:"user",content:usr}], stream:true });
@@ -972,7 +902,7 @@ function DraftingView() {
       });
       const d = await res.json();
       setClauseAI(extractResponse(d) || "No analysis available.");
-    } catch(e) { setClauseAI("Error analysing clause."); }
+    } catch { setClauseAI("Error analysing clause."); }
     setClauseLoad(false);
   }, []);
 
@@ -1214,7 +1144,7 @@ function DraftingView() {
               </div>
               <div style={{padding:"11px 13px"}}>
                 <div style={{padding:"7px 9px",background:C.bgHover,borderRadius:4,fontSize:11,color:C.textSec,fontStyle:"italic",marginBottom:11,lineHeight:1.5,maxHeight:54,overflow:"hidden"}}>
-                  "{clausePanel.text.slice(0,120)}{clausePanel.text.length>120?"…":""}"
+                  &ldquo;{clausePanel.text.slice(0,120)}{clausePanel.text.length>120?"…":""}&rdquo;
                 </div>
                 {clauseLoad
                   ? <div style={{display:"flex",alignItems:"center",gap:8,padding:"6px 0"}}><Spinner/><span style={{fontSize:11,color:C.textMut,fontFamily:F.sans}}>Analysing under Indian law…</span></div>
@@ -1314,7 +1244,6 @@ function RiskReviewView() {
   const [contractText, setContractText] = useState("");
   const [contractType, setContractType] = useState("");
   const [perspective, setPerspective]   = useState("neutral");
-  const [analysing, setAnalysing]       = useState(false);
   const [progress, setProgress]         = useState(0);
   const [statusMsg, setStatusMsg]       = useState("");
   const [results, setResults]           = useState(null);
@@ -1325,7 +1254,7 @@ function RiskReviewView() {
 
   /* ── RUN ANALYSIS ── */
   const runAnalysis = useCallback(async (text, ctype, persp) => {
-    setStage("analysing"); setProgress(0); setAnalysing(true);
+    setStage("analysing"); setProgress(0);
 
     const msgs = [
       "Segmenting clauses…", "Checking Indian Contract Act compliance…",
@@ -1376,7 +1305,7 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
       const parsed = JSON.parse(clean);
       setResults(parsed);
       setProgress(100);
-      setTimeout(() => { setStage("results"); setAnalysing(false); setActiveRisk(parsed.risks?.[0] || null); }, 500);
+      setTimeout(() => { setStage("results"); setActiveRisk(parsed.risks?.[0] || null); }, 500);
     } catch (err) {
       clearInterval(ticker);
       setResults({
@@ -1384,7 +1313,7 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
         summary: `Analysis error: ${err.message}. Please try again.`,
         risks: [], missing_clauses: [], positive_clauses: [],
       });
-      setStage("results"); setAnalysing(false);
+      setStage("results");
     }
   }, []);
 
@@ -1643,7 +1572,7 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
               {/* clause excerpt */}
               <div style={{background:C.bgCard,border:`1px solid ${C.border}`,borderLeft:`3px solid ${RISK_COLORS[activeRisk.risk_level]}`,borderRadius:"0 8px 8px 0",padding:"14px 16px",marginBottom:20}}>
                 <div style={{fontSize:9,color:C.textMut,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:7,fontFamily:F.sans}}>Clause Excerpt</div>
-                <p style={{fontSize:12.5,color:C.textPri,fontFamily:F.sans,fontWeight:300,lineHeight:1.8,fontStyle:"italic"}}>"{activeRisk.clause_excerpt}"</p>
+                <p style={{fontSize:12.5,color:C.textPri,fontFamily:F.sans,fontWeight:300,lineHeight:1.8,fontStyle:"italic"}}>&ldquo;{activeRisk.clause_excerpt}&rdquo;</p>
               </div>
 
               {/* issue */}
@@ -2033,7 +1962,7 @@ Special Notes: ${form.notes||"None"}`;
         <div style={{maxWidth:700}}>
           <div style={{marginBottom:24}}>
             <div style={{fontFamily:F.serif,fontSize:26,fontWeight:600,color:C.textPri,marginBottom:5}}>Compliance Checklist</div>
-            <p style={{fontSize:13,color:C.textSec,fontFamily:F.sans,fontWeight:300}}>Tell Astreya about your entity. You'll get a state-specific, sector-aware compliance checklist covering registrations, filings, labour law, tax, and more.</p>
+            <p style={{fontSize:13,color:C.textSec,fontFamily:F.sans,fontWeight:300}}>Tell Astreya about your entity. You&apos;ll get a state-specific, sector-aware compliance checklist covering registrations, filings, labour law, tax, and more.</p>
           </div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
             {[
@@ -2528,102 +2457,6 @@ function MattersView() {
 }
 
 /* ══════════════════════════════════════════════
-   PLACEHOLDER
-══════════════════════════════════════════════ */
-function PlaceholderView({ label }) {
-  return (
-    <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:10}}>
-      <div style={{fontFamily:F.serif,fontSize:28,color:C.textMut,fontWeight:500}}>{label}</div>
-      <div style={{fontSize:13,color:C.textMut,fontFamily:F.sans,fontWeight:300}}>Coming soon.</div>
-    </div>
-  );
-}
-
-/* ══════════════════════════════════════════════
-   LLM SETTINGS MODAL
-══════════════════════════════════════════════ */
-function LLMSettingsModal({ onClose, onSave }) {
-  const [mode, setMode]                   = useState(LLM_CONFIG.mode);
-  const [openrouterKey, setOpenrouterKey] = useState(LLM_CONFIG.openrouterKey);
-  const [openrouterModel, setOpenrouterModel] = useState(LLM_CONFIG.openrouterModel);
-  const [localEndpoint, setLocalEndpoint] = useState(LLM_CONFIG.localEndpoint);
-  const [localModel, setLocalModel]       = useState(LLM_CONFIG.localModel);
-
-  const handleSave = () => {
-    LLM_CONFIG.mode = mode;
-    LLM_CONFIG.openrouterKey = openrouterKey;
-    LLM_CONFIG.openrouterModel = openrouterModel;
-    LLM_CONFIG.localEndpoint = localEndpoint;
-    LLM_CONFIG.localModel = localModel;
-    onSave(mode);
-  };
-
-  const field = (label, value, setValue, placeholder) => (
-    <div style={{ marginBottom: 14 }}>
-      <label style={{ display:"block", fontSize:10, color:C.textSec, fontFamily:F.sans, letterSpacing:"0.05em", marginBottom:7 }}>{label}</label>
-      <div style={{ display:"flex", alignItems:"center", background:C.bgCard, border:`1px solid ${C.border}`, borderRadius:7, overflow:"hidden", transition:"border-color 0.15s" }}
-        onFocusCapture={e=>e.currentTarget.style.borderColor=C.red}
-        onBlurCapture={e=>e.currentTarget.style.borderColor=C.border}>
-        <input value={value} onChange={e=>setValue(e.target.value)} placeholder={placeholder}
-          onKeyDown={e=>{ if(e.key==="Enter") handleSave(); if(e.key==="Escape") onClose(); }}
-          style={{ flex:1, background:"transparent", border:"none", outline:"none", padding:"10px 13px", fontSize:12.5, color:C.textPri, fontFamily:F.sans, fontWeight:300 }}/>
-      </div>
-    </div>
-  );
-
-  return (
-    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.72)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000, animation:"fadeIn 0.18s ease" }}
-      onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
-      <div style={{ background:C.bgPanel, border:`1px solid ${C.borderMid}`, borderRadius:12, padding:"28px 28px 24px", width:420, animation:"fadeUp 0.2s ease", boxShadow:"0 16px 48px rgba(0,0,0,0.6)" }}
-        onClick={e=>e.stopPropagation()}>
-        <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:20 }}>
-          <div style={{ width:32, height:32, background:C.goldDim, border:`1px solid ${C.gold}33`, borderRadius:7, display:"flex", alignItems:"center", justifyContent:"center", fontSize:16 }}>⚙</div>
-          <div>
-            <div style={{ fontSize:13, fontWeight:600, color:C.textPri, fontFamily:F.sans }}>LLM Settings</div>
-            <div style={{ fontSize:10, color:C.textMut, fontFamily:F.sans }}>Configure Gemma 4 backend</div>
-          </div>
-          <button onClick={onClose} style={{ marginLeft:"auto", background:"transparent", border:"none", color:C.textMut, cursor:"pointer", fontSize:18, lineHeight:1, padding:4 }}>×</button>
-        </div>
-
-        <div style={{ display:"flex", gap:4, marginBottom:20, background:C.bgCard, border:`1px solid ${C.border}`, borderRadius:7, padding:3 }}>
-          {[{ id:"openrouter", label:"OpenRouter" }, { id:"local", label:"Local" }].map(opt=>(
-            <button key={opt.id} onClick={()=>setMode(opt.id)}
-              style={{ flex:1, padding:"8px 10px", borderRadius:5, border:"none", cursor:"pointer", fontFamily:F.sans, fontSize:11, letterSpacing:"0.03em", transition:"all 0.15s", background:mode===opt.id?C.redFaint:"transparent", color:mode===opt.id?C.red:C.textSec, fontWeight:mode===opt.id?600:400 }}>
-              {opt.label}
-            </button>
-          ))}
-        </div>
-
-        {mode === "openrouter" ? (
-          <>
-            {field("API KEY", openrouterKey, setOpenrouterKey, process.env.OPENROUTER_API_KEY)}
-            {field("MODEL SLUG", openrouterModel, setOpenrouterModel, "google/gemma-4-31b-it:free")}
-          </>
-        ) : (
-          <>
-            {field("ENDPOINT URL", localEndpoint, setLocalEndpoint, "http://10.156.74.187:1234/v1")}
-            {field("MODEL NAME", localModel, setLocalModel, "gemma-4-e4b")}
-            <div style={{ fontSize:9, color:C.textMut, fontFamily:F.sans, marginTop:-6, marginBottom:14, lineHeight:1.5 }}>
-              LM Studio: enable the local server, then use its IP with <code style={{ color:C.textSec }}>/v1</code> (e.g. <code style={{ color:C.textSec }}>http://10.156.74.187:1234/v1</code>).
-              Ollama: <code style={{ color:C.textSec }}>http://localhost:11434/v1</code>
-            </div>
-          </>
-        )}
-
-        <div style={{ display:"flex", gap:8, marginBottom:14 }}>
-          <Btn onClick={onClose} style={{ flex:1, justifyContent:"center", padding:"10px 13px" }}>Cancel</Btn>
-          <Btn primary onClick={handleSave} style={{ flex:2, justifyContent:"center", padding:"10px 13px" }}>Save</Btn>
-        </div>
-
-        <div style={{ fontSize:9, color:C.textMut, fontFamily:F.sans, lineHeight:1.5, textAlign:"center" }}>
-          Your API key is used only in this browser session and is never stored.
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ══════════════════════════════════════════════
    ROOT APP
 ══════════════════════════════════════════════ */
 export default function AstreyaApp() {
@@ -2631,8 +2464,6 @@ export default function AstreyaApp() {
   const [matter, setMatter]     = useState("m1");
   const [mOpen, setMOpen]       = useState(false);
   const [collapsed, setCollapsed] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
-  const [llmMode, setLlmMode] = useState(LLM_CONFIG.mode);
   const m = MATTERS.find(x=>x.id===matter);
 
   const NavIcon = ({id}) => {
@@ -2742,18 +2573,14 @@ export default function AstreyaApp() {
           </div>
           {!collapsed && (
             <div
-              onClick={() => setShowSettings(true)}
-              style={{ display:"flex", alignItems:"center", gap:5, marginTop:7, cursor:"pointer",
+              title="Gemma 4 served securely through Google AI Studio"
+              style={{ display:"flex", alignItems:"center", gap:5, marginTop:7,
                 padding:"4px 7px", background:C.bgHover, borderRadius:4, border:`1px solid ${C.border}` }}
-              onMouseEnter={e => e.currentTarget.style.borderColor = C.borderMid}
-              onMouseLeave={e => e.currentTarget.style.borderColor = C.border}
             >
-              <div style={{ width:5, height:5, borderRadius:"50%",
-                background: llmMode === "local" ? C.green : C.gold }} />
+              <div style={{ width:5, height:5, borderRadius:"50%", background:C.green }} />
               <span style={{ fontSize:9, color:C.textMut, fontFamily:F.sans, letterSpacing:"0.08em" }}>
-                {llmMode === "local" ? "LOCAL GEMMA 4" : "OPENROUTER · GEMMA 4"}
+                AI STUDIO · GEMMA 4
               </span>
-              <span style={{ fontSize:9, color:C.textMut, marginLeft:"auto" }}>⚙</span>
             </div>
           )}
         </div>
@@ -2769,13 +2596,6 @@ export default function AstreyaApp() {
         {nav==="history"  && <HistoryView/>}
         {nav==="matters"  && <MattersView/>}
       </div>
-
-      {showSettings && (
-        <LLMSettingsModal
-          onClose={() => setShowSettings(false)}
-          onSave={(mode) => { setLlmMode(mode); setShowSettings(false); }}
-        />
-      )}
     </div>
   );
 }
