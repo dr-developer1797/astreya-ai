@@ -484,12 +484,14 @@ const RESEARCH_SYSTEM = `You are Astreya, an expert AI legal assistant specialis
 
 RULES:
 1. Answer ONLY questions about Indian law (statutes, case law, procedure, compliance).
-2. Every factual claim MUST be supported by a citation in brackets — statute section OR case citation (use SCC / AIR / Manupatra formats).
-3. When REAL CASES are provided in the context block below, prioritise those — cite them accurately by title and citation as given.
-4. Structure responses clearly: use numbered points, headings, and citation anchors.
-5. Always note when BNS 2023 / BNSS 2023 / BSA 2023 replace IPC / CrPC / Evidence Act (effective July 1, 2024).
-6. Never hallucinate case names, citations, or section numbers. If uncertain, say so.
-7. End every response with: "⚠ Research output only — verify with primary sources and consult a qualified advocate."`;
+2. Every factual claim MUST be supported by a citation in brackets — a statute section OR a case.
+3. A RETRIEVED SOURCES block may follow the question. It is fetched live from IndianKanoon and outranks your own recollection — where it contradicts your memory, follow the block.
+4. Cite a retrieved source exactly as given. Use its "Reported at" citation when one is supplied; when none is supplied, cite the case by title, court and date instead. NEVER invent an SCC / AIR / SCR reporter number for a case that lists none.
+5. Ignore any retrieved source that does not bear on the question rather than forcing it into the answer. If the retrieved material is thin, say so plainly.
+6. Structure responses clearly: use numbered points, headings, and citation anchors.
+7. Always note when BNS 2023 / BNSS 2023 / BSA 2023 replace IPC / CrPC / Evidence Act (effective July 1, 2024).
+8. Never hallucinate case names, citations, or section numbers. If uncertain, say so.
+9. End every response with: "⚠ Research output only — verify with primary sources and consult a qualified advocate."`;
 
 function ResearchView() {
   const [messages,  setMessages]  = useState([]);
@@ -500,7 +502,8 @@ function ResearchView() {
   const [topic,     setTopic]     = useState("Legal Research");
   const [ikSources, setIkSources] = useState([]);
   const [ikLoading, setIkLoading] = useState(false);
-  const [, setIkError] = useState("");   // tracked, but no longer surfaced in the UI
+  const [ikError,   setIkError]   = useState("");
+  const [ikGrounded,setIkGrounded]= useState(null);   // null until the first query resolves
   const scrollRef = useRef(null);
 
   useEffect(() => {
@@ -516,40 +519,52 @@ function ResearchView() {
     const history = [...messages, userMsg];
     setMessages(history); setStreaming(true); setStreamText("");
 
-    /* STEP 1 — IndianKanoon */
+    /* STEP 1 — IndianKanoon retrieval (statutes + Supreme Court + High Courts) */
     let ikDocs = [];
-    setIkLoading(true);
+    setIkLoading(true); setIkSources([]);
     try {
       const ikRes = await fetch("/api/legal-search", {
         method:"POST",
         headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({ query:q, page:0 }),
       });
-      if (!ikRes.ok) throw new Error(`IK ${ikRes.status}`);
-      const ikJson = await ikRes.json();
-      ikDocs = (ikJson.docs||[]).slice(0,8);
-      setIkSources(ikDocs.map((d,i)=>({
-        id:d.tid, title:d.title||"Untitled", headline:d.headline||"",
-        citation:d.citation||"", court:d.court||"",
-        date:d.publishdate?d.publishdate.slice(0,10):"",
-        numcites:d.numcites||0,
-        url:`https://indiankanoon.org/doc/${d.tid}/`, rank:i+1,
-      })));
-    } catch(err) { setIkError(err.message); }
+      const ikJson = await ikRes.json().catch(()=>({}));
+      if (!ikRes.ok) throw new Error(ikJson.error || `Search failed (${ikRes.status})`);
+
+      ikDocs = Array.isArray(ikJson.sources) ? ikJson.sources.map((d,i)=>({...d, ref:i+1})) : [];
+      setIkSources(ikDocs);
+      setIkGrounded(ikDocs.length>0);
+      if (ikJson.configured === false)  setIkError("Case-law search is not configured — answering from the model's own knowledge only.");
+      else if (ikDocs.length === 0)     setIkError("No IndianKanoon match for this query — answering without retrieved authority.");
+      else if (ikJson.degraded)         setIkError("Part of IndianKanoon did not respond — results may be incomplete.");
+    } catch(err) {
+      setIkError(`IndianKanoon unavailable (${err.message}) — answering without retrieved authority.`);
+      setIkGrounded(false);
+    }
     setIkLoading(false);
 
     /* STEP 2 — Build grounding context */
+    const fmt = (d) => {
+      const lines = [`[${d.ref}] ${d.title}`];
+      // Only a real reporter citation is passed through; the model is told not to invent one.
+      if (d.citation) lines.push(`    Reported at: ${d.citation}`);
+      lines.push(`    Source: ${d.court||"N/A"} | Date: ${d.date||"N/A"} | Cited by ${d.citedBy} documents`);
+      lines.push(`    URL: ${d.url}`);
+      if (d.fullText)     lines.push(`    Verbatim extract: ${d.fullText}`);
+      else if (d.snippet) lines.push(`    Matched passage: ${d.snippet}`);
+      return lines.join("\n");
+    };
+    const statutes = ikDocs.filter(d=>d.kind==="statute");
+    const rulings  = ikDocs.filter(d=>d.kind!=="statute");
     const ikContext = ikDocs.length>0
-      ? "\n\n--- RETRIEVED CASES FROM INDIANKANOON ---\n"+
-        ikDocs.slice(0,6).map((d,i)=>
-          `[${i+1}] ${d.title||"Unknown"}\n`+
-          `    Citation: ${d.citation||"N/A"} | Court: ${d.court||"N/A"} | Date: ${d.publishdate||"N/A"}\n`+
-          `    Excerpt: ${(d.headline||"").replace(/<[^>]*>/g,"").slice(0,300)}`
-        ).join("\n\n")+
-        "\n--- END ---"
+      ? "\n\n--- RETRIEVED SOURCES FROM INDIANKANOON ---\n"+
+        [ statutes.length ? "STATUTORY PROVISIONS:\n"+statutes.map(fmt).join("\n\n") : "",
+          rulings.length  ? "JUDGMENTS:\n"+rulings.map(fmt).join("\n\n")  : "",
+        ].filter(Boolean).join("\n\n")+
+        "\n--- END RETRIEVED SOURCES ---"
       : "";
 
-    /* STEP 3 — Claude with IK context */
+    /* STEP 3 — Answer, grounded on the retrieved sources */
     const apiMessages = [
       ...history.slice(0,-1).map(m=>({role:m.role,content:m.content})),
       {role:"user", content:q+ikContext},
@@ -577,11 +592,12 @@ function ResearchView() {
     const dt="Yes. A High Court holds inherent power to quash an FIR under **Section 482, CrPC 1973** (now **Section 528, BNSS 2023**, effective July 1, 2024). This power is discretionary and must be exercised sparingly.\n\n**Governing Framework**\n- Section 482 CrPC / Section 528 BNSS 2023\n- Article 226, Constitution of India\n\n**Seven Bhajan Lal Grounds** [1992 Supp (1) SCC 335]\n\n01. Allegations do not constitute a cognisable offence at face value\n02. Allegations are manifestly absurd or inherently impossible\n03. Offence not cognisable — police had no authority\n04. Prosecution attended with mala fide intent\n05. Proceeding filed to wreak vengeance or settle scores\n06. Continuing would amount to abuse of process\n07. Legal bar against initiation or continuance\n\n**Key Precedents**\n- *State of Haryana v. Bhajan Lal* — 1992 Supp (1) SCC 335\n- *Neeharika Infrastructure v. State of Maharashtra* — (2021) 19 SCC 401\n- *Pepsi Foods Ltd. v. Special Judicial Magistrate* — (1998) 5 SCC 749\n\n\u26a0 Research output only — verify with primary sources and consult a qualified advocate.";
     setMessages([{role:"user",content:SAMPLE_Q},{role:"assistant",content:""}]);
     setTopic("Criminal Procedure"); setStreaming(true); setStreamText("");
+    setIkError(""); setIkGrounded(true);
     setIkSources([
-      {id:"1306176",title:"State of Haryana v. Bhajan Lal",citation:"1992 Supp (1) SCC 335",court:"Supreme Court of India",date:"1992-11-21",numcites:4280,url:"https://indiankanoon.org/doc/1306176/",rank:1,headline:""},
-      {id:"1501908",title:"Neeharika Infrastructure v. State of Maha.",citation:"(2021) 19 SCC 401",court:"Supreme Court of India",date:"2021-04-01",numcites:1124,url:"https://indiankanoon.org/doc/1501908/",rank:2,headline:""},
-      {id:"501105",title:"Pepsi Foods Ltd. v. Special Judicial Magistrate",citation:"(1998) 5 SCC 749",court:"Supreme Court of India",date:"1998-04-07",numcites:890,url:"https://indiankanoon.org/doc/501105/",rank:3,headline:""},
-      {id:"1279834",title:"Medchl Chemicals v. Biological E Ltd.",citation:"(2000) 3 SCC 269",court:"Supreme Court of India",date:"2000-02-16",numcites:612,url:"https://indiankanoon.org/doc/1279834/",rank:4,headline:""},
+      {id:"1306176",kind:"statute", title:"Section 482 in The Code of Criminal Procedure, 1973",court:"Union of India - Section",date:"1974-01-25",citedBy:644872,url:"https://indiankanoon.org/doc/1306176/",ref:1,snippet:"Saving of inherent powers of High Court."},
+      {id:"1501908",kind:"judgment",title:"State of Haryana v. Bhajan Lal",citation:"1992 Supp (1) SCC 335",court:"Supreme Court of India",date:"1992-11-21",citedBy:42800,url:"https://indiankanoon.org/doc/1501908/",ref:2,snippet:""},
+      {id:"501105", kind:"judgment",title:"Neeharika Infrastructure v. State of Maharashtra",citation:"AIR 2021 SUPREME COURT 1918",court:"Supreme Court of India",date:"2021-04-13",citedBy:3990,url:"https://indiankanoon.org/doc/501105/",ref:3,snippet:""},
+      {id:"1279834",kind:"judgment",title:"Pepsi Foods Ltd. v. Special Judicial Magistrate",citation:"(1998) 5 SCC 749",court:"Supreme Court of India",date:"1998-04-07",citedBy:8900,url:"https://indiankanoon.org/doc/1279834/",ref:4,snippet:""},
     ]);
     let i=0; let acc="";
     const tick=()=>{
@@ -599,6 +615,19 @@ function ResearchView() {
     const bold=s=>{const ps=s.split(/(\*\*[^*]+\*\*)/g);return ps.map((p,j)=>p.startsWith("**")?<strong key={j} style={{color:C.textPri,fontWeight:600}}>{p.slice(2,-2)}</strong>:p);};
     const it=s=>{const ps=s.split(/(\*[^*]+\*)/g);return ps.map((p,j)=>p.startsWith("*")&&!p.startsWith("**")?<em key={j} style={{fontStyle:"italic"}}>{p.slice(1,-1)}</em>:bold(p));};
     if(/^\d{2}\.\ /.test(line)){const m=line.match(/^(\d{2})\.\s(.*)/);return <div key={i} style={{display:"flex",gap:9,marginBottom:6}}><span style={{color:C.red,fontWeight:700,fontFamily:"monospace",fontSize:11,minWidth:22,flexShrink:0,marginTop:2}}>{m[1]}.</span><span style={{fontSize:13,color:C.textPri,lineHeight:1.7,fontFamily:F.sans,fontWeight:300}}>{it(m[2])}</span></div>;}
+    // Hash headings and pipe tables are both common in the model's output; without these two
+    // branches they reach the reader as literal "###" and "| :--- |" syntax.
+    if(/^#{1,6}\s/.test(line)){
+      const m=line.match(/^(#{1,6})\s+(.*)/); const top=m[1].length<=2;
+      return <div key={i} style={{fontSize:top?14:10,fontWeight:top?600:700,letterSpacing:top?"0.01em":"0.1em",textTransform:top?"none":"uppercase",color:top?C.textPri:C.textSec,marginTop:i>0?18:0,marginBottom:8,borderBottom:`1px solid ${C.border}`,paddingBottom:7,fontFamily:top?F.serif:F.sans}}>{it(m[2])}</div>;
+    }
+    if(/^\s*\|.*\|?\s*$/.test(line)&&line.includes("|")){
+      const cells=line.trim().replace(/^\||\|$/g,"").split("|").map(c=>c.trim());
+      if(cells.every(c=>/^:?-{2,}:?$/.test(c)))return null;
+      return <div key={i} style={{display:"flex",gap:10,padding:"6px 0",borderBottom:`1px solid ${C.border}`}}>
+        {cells.map((c,j)=><div key={j} style={{flex:j===0?"0 0 36%":1,fontSize:12,color:j===0?C.textPri:C.textSec,fontFamily:F.sans,fontWeight:j===0?500:300,lineHeight:1.6}}>{it(c)}</div>)}
+      </div>;
+    }
     if(line.startsWith("**")&&line.endsWith("**"))return <div key={i} style={{fontSize:10,fontWeight:700,letterSpacing:"0.1em",textTransform:"uppercase",color:C.textSec,marginBottom:8,marginTop:i>0?18:0,borderBottom:`1px solid ${C.border}`,paddingBottom:7,fontFamily:F.sans}}>{line.slice(2,-2)}</div>;
     if(line.startsWith("- "))return <div key={i} style={{display:"flex",gap:8,marginBottom:5}}><span style={{color:C.red,fontSize:11,marginTop:3,flexShrink:0}}>▸</span><span style={{fontSize:13,color:C.textPri,lineHeight:1.7,fontFamily:F.sans,fontWeight:300}}>{it(line.slice(2))}</span></div>;
     if(line.startsWith("\u26a0"))return <div key={i} style={{marginTop:14,padding:"9px 13px",background:`${C.amber}0E`,border:`1px solid ${C.amber}33`,borderRadius:6,fontSize:11,color:C.amber,fontFamily:F.sans,lineHeight:1.55}}>{line}</div>;
@@ -615,10 +644,14 @@ function ResearchView() {
           {(streaming||ikLoading)&&<div style={{display:"flex",alignItems:"center",gap:5,marginLeft:4}}><div style={{width:5,height:5,borderRadius:"50%",background:ikLoading?C.gold:C.red,animation:"pulse 1s infinite"}}/><span style={{fontSize:9,color:ikLoading?C.gold:C.red,letterSpacing:"0.08em"}}>{ikLoading?"FETCHING CASES\u2026":"GENERATING\u2026"}</span></div>}
         </div>
         <div style={{display:"flex",gap:7,alignItems:"center"}}>
-          <div style={{display:"flex",alignItems:"center",gap:5,padding:"3px 9px",background:`${C.gold}12`,border:`1px solid ${C.gold}33`,borderRadius:4}}>
-            <div style={{width:5,height:5,borderRadius:"50%",background:C.green}}/>
-            <span style={{fontSize:9,color:C.gold,letterSpacing:"0.07em",fontFamily:F.sans}}>IndianKanoon Live</span>
-          </div>
+          {/* Reflects the actual state of retrieval, so the badge never implies grounding that failed. */}
+          {(()=>{ const ok=ikGrounded!==false, tone=ok?C.gold:C.amber;
+            return (
+              <div style={{display:"flex",alignItems:"center",gap:5,padding:"3px 9px",background:`${tone}12`,border:`1px solid ${tone}33`,borderRadius:4}} title={ikError||"Answers grounded on live IndianKanoon sources"}>
+                <div style={{width:5,height:5,borderRadius:"50%",background:ikGrounded===null?C.textMut:ok?C.green:C.amber}}/>
+                <span style={{fontSize:9,color:tone,letterSpacing:"0.07em",fontFamily:F.sans}}>{ok?"IndianKanoon Live":"Ungrounded"}</span>
+              </div>
+            ); })()}
           <Btn onClick={demo}>↻ Demo Mode</Btn>
           <Btn onClick={()=>setShowSrc(s=>!s)} style={showSrc?{borderColor:C.red,color:C.red,background:C.redFaint}:{}}>Sources</Btn>
         </div>
@@ -697,7 +730,7 @@ function ResearchView() {
                 Search
               </Btn>
             </div>
-            {messages.length>0&&<div style={{marginTop:6}}><span onClick={()=>{setMessages([]);setIkSources([]);setTopic("Legal Research");}} style={{fontSize:10,color:C.textMut,cursor:"pointer",fontFamily:F.sans}} onMouseEnter={e=>e.target.style.color=C.textSec} onMouseLeave={e=>e.target.style.color=C.textMut}>✕ Clear conversation</span></div>}
+            {messages.length>0&&<div style={{marginTop:6}}><span onClick={()=>{setMessages([]);setIkSources([]);setTopic("Legal Research");setIkError("");setIkGrounded(null);}} style={{fontSize:10,color:C.textMut,cursor:"pointer",fontFamily:F.sans}} onMouseEnter={e=>e.target.style.color=C.textSec} onMouseLeave={e=>e.target.style.color=C.textMut}>✕ Clear conversation</span></div>}
           </div>
         </div>
 
@@ -713,8 +746,14 @@ function ResearchView() {
               </div>
               <div style={{display:"flex",alignItems:"center",gap:5,padding:"4px 8px",background:`${C.gold}0A`,border:`1px solid ${C.gold}22`,borderRadius:4}}>
                 <div style={{width:5,height:5,borderRadius:"50%",background:ikSources.length>0?C.green:C.textMut}}/>
-                <span style={{fontSize:9,color:C.gold,fontFamily:F.sans,letterSpacing:"0.06em"}}>{ikSources.length>0?"Live case data":"Awaiting query"}</span>
+                <span style={{fontSize:9,color:C.gold,fontFamily:F.sans,letterSpacing:"0.06em"}}>
+                  {ikSources.length>0?(()=>{const st=ikSources.filter(s=>s.kind==="statute").length, ju=ikSources.length-st;
+                    return [st?`${st} statute${st>1?"s":""}`:"", ju?`${ju} judgment${ju>1?"s":""}`:""].filter(Boolean).join(" · ");})():"Awaiting query"}
+                </span>
               </div>
+              {ikError&&(
+                <div style={{marginTop:6,padding:"6px 8px",background:`${C.amber}0E`,border:`1px solid ${C.amber}33`,borderRadius:4,fontSize:9.5,color:C.amber,fontFamily:F.sans,lineHeight:1.5}}>{ikError}</div>
+              )}
             </div>
             <div style={{flex:1,overflowY:"auto",padding:"9px 11px"}}>
               {ikLoading&&[1,2,3].map(i=>(
@@ -731,19 +770,23 @@ function ResearchView() {
                   onMouseEnter={e=>e.currentTarget.style.borderColor=C.gold}
                   onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
-                    <span style={{fontSize:9,color:C.textMut,fontFamily:"monospace"}}>#{src.rank}</span>
                     <div style={{display:"flex",alignItems:"center",gap:5}}>
-                      {src.numcites>0&&<span style={{fontSize:9,color:C.textMut}}>🔗 {src.numcites.toLocaleString()}</span>}
+                      <span style={{fontSize:9,color:C.textMut,fontFamily:"monospace"}}>#{src.ref}</span>
+                      <span style={{fontSize:8,color:src.kind==="statute"?C.blue:C.textSec,background:src.kind==="statute"?`${C.blue}18`:C.bgHover,border:`1px solid ${src.kind==="statute"?`${C.blue}30`:C.border}`,borderRadius:3,padding:"1px 5px",letterSpacing:"0.05em"}}>{src.kind==="statute"?"STATUTE":"JUDGMENT"}</span>
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:5}}>
+                      {/* Cited-by counts inbound references, which is what indicates authority. */}
+                      {src.citedBy>0&&<span style={{fontSize:9,color:C.textMut}} title={`Cited by ${src.citedBy.toLocaleString()} documents`}>🔗 {src.citedBy.toLocaleString()}</span>}
                       <span style={{fontSize:8,color:C.gold,background:`${C.gold}18`,border:`1px solid ${C.gold}30`,borderRadius:3,padding:"1px 5px"}}>IK</span>
                     </div>
                   </div>
                   <div style={{fontSize:11.5,color:C.textPri,fontFamily:F.sans,fontWeight:500,lineHeight:1.35,marginBottom:4}}>{src.title}</div>
                   {src.citation&&<div style={{fontSize:10,color:C.gold,fontFamily:"monospace",marginBottom:4,fontStyle:"italic"}}>{src.citation}</div>}
-                  <div style={{display:"flex",justifyContent:"space-between",marginBottom:src.headline?5:0}}>
+                  <div style={{display:"flex",justifyContent:"space-between",gap:8,marginBottom:src.snippet?5:0}}>
                     <span style={{fontSize:9,color:C.textSec,fontFamily:F.sans}}>{src.court}</span>
-                    <span style={{fontSize:9,color:C.textMut}}>{src.date}</span>
+                    <span style={{fontSize:9,color:C.textMut,flexShrink:0}}>{src.date}</span>
                   </div>
-                  {src.headline&&<div style={{fontSize:10.5,color:C.textMut,fontFamily:F.sans,lineHeight:1.5,borderTop:`1px solid ${C.border}`,paddingTop:5,marginTop:4}} dangerouslySetInnerHTML={{__html:src.headline.slice(0,180)}}/>}
+                  {src.snippet&&<div style={{fontSize:10.5,color:C.textMut,fontFamily:F.sans,lineHeight:1.5,borderTop:`1px solid ${C.border}`,paddingTop:5,marginTop:4}}>{src.snippet.slice(0,180)}</div>}
                   <div style={{marginTop:6,fontSize:9,color:C.gold,fontFamily:F.sans}}>Open on IndianKanoon ↗</div>
                 </div>
               ))}
@@ -751,12 +794,12 @@ function ResearchView() {
             {ikSources.length>0&&(
               <div style={{padding:"9px 11px",borderTop:`1px solid ${C.border}`,flexShrink:0}}>
                 <div style={{fontSize:9,color:C.textMut,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:7}}>Most Cited</div>
-                {[...ikSources].sort((a,b)=>b.numcites-a.numcites).slice(0,3).map((src,i)=>(
+                {[...ikSources].sort((a,b)=>b.citedBy-a.citedBy).slice(0,3).map((src,i)=>(
                   <div key={src.id} onClick={()=>window.open(src.url,"_blank","noopener")} style={{display:"flex",alignItems:"center",gap:7,marginBottom:6,cursor:"pointer"}}>
                     <div style={{width:18,height:18,borderRadius:3,background:C.bgCard,border:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:C.gold,flexShrink:0}}>{i+1}</div>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontSize:10,color:C.textPri,fontFamily:F.sans,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{src.title}</div>
-                      <div style={{fontSize:9,color:C.textMut}}>{src.numcites.toLocaleString()} citations</div>
+                      <div style={{fontSize:9,color:C.textMut}}>cited by {src.citedBy.toLocaleString()}</div>
                     </div>
                   </div>
                 ))}
