@@ -15,6 +15,9 @@ const FONT_IMPORT = `
   @keyframes shimmer { 0%{opacity:0.4;} 50%{opacity:1;} 100%{opacity:0.4;} }
   @keyframes spin    { from{transform:rotate(0deg);} to{transform:rotate(360deg);} }
   @keyframes blink   { 0%,100%{opacity:1;} 50%{opacity:0;} }
+  @keyframes demoMarquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+  .demo-marquee-track { animation: demoMarquee 42s linear infinite; will-change: transform; }
+  .demo-marquee-track:hover { animation-play-state: paused; }
 `;
 
 const C = {
@@ -305,6 +308,37 @@ function Btn({ children, onClick, primary, style: sx={} }) {
 }
 
 const Label = ({children,mt=0}) => <div style={{fontSize:9,color:C.textMut,letterSpacing:"0.13em",textTransform:"uppercase",marginBottom:7,marginTop:mt}}>{children}</div>;
+
+const DEMO_DISCLAIMER =
+  "Demo build — no login required. Astreya is in alpha; some features may be limited or incomplete. Work is not persisted across page refresh.";
+
+function DemoDisclaimerMarquee() {
+  const item = (
+    <span style={{ display:"inline-flex", alignItems:"center", gap:"2.5em", paddingRight:"2.5em" }}>
+      <span style={{ fontSize:10, color:C.amber, fontFamily:F.sans, letterSpacing:"0.06em", fontWeight:500 }}>
+        {DEMO_DISCLAIMER}
+      </span>
+      <span style={{ color:`${C.amber}55`, fontSize:8 }}>◆</span>
+    </span>
+  );
+  return (
+    <div
+      role="status"
+      aria-label={DEMO_DISCLAIMER}
+      style={{
+        flexShrink:0,
+        background:`linear-gradient(90deg, ${C.amber}12, ${C.amber}08, ${C.amber}12)`,
+        borderBottom:`1px solid ${C.amber}30`,
+        overflow:"hidden",
+        height:28,
+      }}
+    >
+      <div className="demo-marquee-track" style={{ display:"flex", width:"max-content", alignItems:"center", height:"100%" }}>
+        {item}{item}
+      </div>
+    </div>
+  );
+}
 
 /* ══════════════════════════════════════════════
    WORD DOCUMENT EXPORT ENGINE
@@ -2526,8 +2560,11 @@ export default function AstreyaApp() {
   const sideTransition = "width 0.22s cubic-bezier(0.4,0,0.2,1)";
 
   return (
-    <div style={{fontFamily:F.sans,background:C.bg,height:"100vh",display:"flex",overflow:"hidden"}}>
+    <div style={{fontFamily:F.sans,background:C.bg,height:"100vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
       <style>{FONT_IMPORT}</style>
+      <DemoDisclaimerMarquee />
+
+      <div style={{flex:1,display:"flex",overflow:"hidden",minHeight:0}}>
 
       {/* ── SIDEBAR ── */}
       <div style={{width:sideW,minWidth:sideW,background:C.bgPanel,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",flexShrink:0,overflow:"hidden",transition:sideTransition}}>
@@ -2638,6 +2675,7 @@ export default function AstreyaApp() {
         {nav==="comply"   && <ComplianceView/>}
         {nav==="history"  && <HistoryView/>}
         {nav==="matters"  && <MattersView/>}
+      </div>
       </div>
     </div>
   );
