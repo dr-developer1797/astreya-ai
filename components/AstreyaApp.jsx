@@ -1,7 +1,44 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo, createContext, useContext } from "react";
 import Image from "next/image";
+
+const MOBILE_MAX = 767;
+const TABLET_MAX = 1023;
+
+const ViewportContext = createContext({
+  isMobile: false,
+  isTablet: false,
+  isDesktop: true,
+  isCompact: false,
+});
+
+function useViewport() {
+  const [vp, setVp] = useState({ isMobile: false, isTablet: false, isDesktop: true, isCompact: false });
+
+  useEffect(() => {
+    const update = () => {
+      const w = window.innerWidth;
+      const isMobile = w <= MOBILE_MAX;
+      const isTablet = w > MOBILE_MAX && w <= TABLET_MAX;
+      setVp({
+        isMobile,
+        isTablet,
+        isDesktop: w > TABLET_MAX,
+        isCompact: w <= TABLET_MAX,
+      });
+    };
+    update();
+    window.addEventListener("resize", update, { passive: true });
+    window.addEventListener("orientationchange", update);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("orientationchange", update);
+    };
+  }, []);
+
+  return vp;
+}
 
 const FONT_IMPORT = `
   @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400;1,600&family=Outfit:wght@300;400;500;600&display=swap');
@@ -18,6 +55,194 @@ const FONT_IMPORT = `
   @keyframes demoMarquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
   .demo-marquee-track { animation: demoMarquee 42s linear infinite; will-change: transform; }
   .demo-marquee-track:hover { animation-play-state: paused; }
+  @keyframes slideUp { from { transform: translateY(100%); opacity: 0.85; } to { transform: translateY(0); opacity: 1; } }
+
+  .ast-root { height: 100vh; height: 100dvh; overflow: hidden; }
+  .ast-main-stack { min-width: 0; }
+  .ast-mobile-top { display: none; }
+  .ast-bottom-nav { display: none; }
+  .ast-backdrop { display: none; }
+  .ast-mobile-menu-btn { display: none; }
+
+  @media (max-width: 767px) {
+    .ast-shell { position: relative; min-height: 0; }
+    .ast-sidebar {
+      position: fixed !important;
+      top: 24px;
+      left: 0;
+      bottom: 0;
+      z-index: 300;
+      transform: translateX(-105%);
+      width: min(280px, 88vw) !important;
+      min-width: 0 !important;
+      transition: transform 0.25s cubic-bezier(0.4,0,0.2,1), width 0.22s !important;
+      box-shadow: 8px 0 32px rgba(0,0,0,0.45);
+    }
+    .ast-sidebar.ast-open { transform: translateX(0); }
+    .ast-backdrop {
+      display: block;
+      position: fixed;
+      inset: 0;
+      top: 24px;
+      background: rgba(0,0,0,0.55);
+      z-index: 290;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+    }
+    .ast-backdrop.ast-visible { opacity: 1; pointer-events: auto; }
+    .ast-mobile-top {
+      display: flex !important;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      border-bottom: 1px solid #22232F;
+      background: #0F1016;
+      flex-shrink: 0;
+    }
+    .ast-mobile-menu-btn {
+      display: inline-flex !important;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      height: 36px;
+      border: 1px solid #22232F;
+      border-radius: 6px;
+      background: transparent;
+      color: #8B8BA8;
+      cursor: pointer;
+      flex-shrink: 0;
+    }
+    .ast-bottom-nav {
+      display: flex !important;
+      align-items: stretch;
+      justify-content: space-around;
+      flex-shrink: 0;
+      border-top: 1px solid #22232F;
+      background: #0F1016;
+      padding: 4px 2px calc(4px + env(safe-area-inset-bottom, 0px));
+      z-index: 260;
+    }
+    .ast-bottom-nav-item {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      padding: 6px 2px;
+      border: none;
+      background: transparent;
+      color: #8B8BA8;
+      cursor: pointer;
+      font-family: 'Outfit', sans-serif;
+      font-size: 9px;
+      letter-spacing: 0.04em;
+      min-height: 44px;
+      border-radius: 6px;
+    }
+    .ast-bottom-nav-item.ast-active { color: #D4233A; background: rgba(212,35,58,0.07); }
+    .ast-view-header {
+      flex-wrap: wrap !important;
+      height: auto !important;
+      min-height: 48px !important;
+      padding: 8px 12px !important;
+      row-gap: 8px !important;
+    }
+    .ast-view-header-title { flex: 1 1 auto !important; min-width: 0 !important; overflow: hidden; }
+    .ast-view-header-actions {
+      flex: 1 1 100% !important;
+      display: flex !important;
+      flex-wrap: wrap !important;
+      gap: 6px !important;
+      justify-content: flex-end !important;
+    }
+    .ast-hide-mobile { display: none !important; }
+    .ast-content-pad { padding: 14px 12px !important; }
+    .ast-content-pad-lg { padding: 18px 14px !important; }
+    .ast-input-bar { padding: 10px 12px !important; }
+    .ast-input-row { flex-wrap: wrap !important; gap: 8px !important; }
+    .ast-input-row > button { flex: 1 1 100%; justify-content: center; }
+    .ast-input-tags { display: none !important; }
+    .ast-user-bubble { max-width: 90% !important; }
+    .ast-answer-col { max-width: none !important; }
+    .ast-panel-r {
+      position: fixed !important;
+      inset: 0 !important;
+      top: auto !important;
+      height: min(88vh, 720px) !important;
+      width: 100% !important;
+      max-width: 100% !important;
+      border-left: none !important;
+      border-top: 1px solid #22232F !important;
+      border-radius: 12px 12px 0 0 !important;
+      z-index: 280 !important;
+      box-shadow: 0 -12px 40px rgba(0,0,0,0.55) !important;
+      animation: slideUp 0.25s ease !important;
+    }
+    .ast-panel-overlay-backdrop {
+      position: fixed;
+      inset: 0;
+      top: 24px;
+      background: rgba(0,0,0,0.45);
+      z-index: 275;
+    }
+    .ast-split-row { flex-direction: column !important; }
+    .ast-split-list {
+      width: 100% !important;
+      border-right: none !important;
+      max-height: 46vh !important;
+      flex-shrink: 0 !important;
+    }
+    .ast-split-detail { flex: 1 !important; min-height: 0 !important; width: 100% !important; }
+    .ast-three-col { flex-direction: column !important; overflow-y: auto !important; }
+    .ast-panel-l {
+      width: 100% !important;
+      max-width: 100% !important;
+      border-right: none !important;
+      border-bottom: 1px solid #22232F !important;
+      max-height: 42vh !important;
+      flex-shrink: 0 !important;
+    }
+    .ast-panel-r-inline {
+      width: 100% !important;
+      max-height: 38vh !important;
+      border-left: none !important;
+      border-top: 1px solid #22232F !important;
+    }
+    .ast-filter-row {
+      overflow-x: auto !important;
+      flex-wrap: nowrap !important;
+      -webkit-overflow-scrolling: touch;
+      padding-bottom: 4px !important;
+      max-width: 100%;
+    }
+    .ast-filter-row > * { flex-shrink: 0 !important; }
+    .ast-doc-grid { grid-template-columns: 1fr !important; }
+    .ast-export-modal { width: calc(100vw - 32px) !important; max-width: 420px !important; padding: 20px 18px !important; margin: 16px !important; }
+    .ast-marquee-bar { height: 24px !important; }
+    .ast-demo-marquee-track { font-size: 9px !important; }
+    .ast-editor-side { width: 100% !important; max-height: 36vh !important; border-left: none !important; border-top: 1px solid #22232F !important; }
+    .ast-intake-actions { flex-wrap: wrap !important; gap: 6px !important; }
+    .ast-intake-actions > * { flex: 1 1 auto; }
+  }
+
+  @media (max-width: 767px) and (orientation: landscape) {
+    .ast-panel-r { height: min(94vh, 100%) !important; border-radius: 0 !important; top: 24px !important; }
+    .ast-split-list, .ast-panel-l, .ast-panel-r-inline { max-height: 34vh !important; }
+    .ast-bottom-nav { padding-top: 2px; padding-bottom: calc(2px + env(safe-area-inset-bottom, 0px)); }
+    .ast-bottom-nav-item { min-height: 38px; padding: 4px 2px; }
+  }
+
+  @media (min-width: 768px) and (max-width: 1023px) {
+    .ast-sidebar-expanded { width: 188px !important; min-width: 188px !important; }
+    .ast-panel-r-narrow { width: 210px !important; }
+    .ast-panel-l-narrow { width: 240px !important; }
+    .ast-content-pad-tablet { padding: 18px 16px !important; }
+    .ast-view-header { padding: 0 16px !important; }
+    .ast-hide-tablet { display: none !important; }
+    .ast-filter-row { flex-wrap: wrap !important; }
+  }
 `;
 
 const C = {
@@ -297,10 +522,10 @@ const SAMPLE_Q = "Can an FIR be quashed by the High Court under Section 482 CrPC
 /* ── TINY COMPONENTS ── */
 const Spinner = () => <div style={{width:13,height:13,border:`2px solid ${C.border}`,borderTop:`2px solid ${C.red}`,borderRadius:"50%",animation:"spin 0.7s linear infinite"}}/>;
 
-function Btn({ children, onClick, primary, style: sx={} }) {
+function Btn({ children, onClick, primary, style: sx={}, className="" }) {
   const base = {display:"flex",alignItems:"center",gap:5,padding:"6px 13px",borderRadius:5,fontSize:11,cursor:"pointer",fontFamily:F.sans,letterSpacing:"0.04em",transition:"all 0.15s",border:`1px solid ${primary?C.red:C.border}`,background:primary?C.red:"transparent",color:primary?"#fff":C.textSec,...sx};
   return (
-    <button style={base} onClick={onClick}
+    <button className={className} style={base} onClick={onClick}
       onMouseEnter={e=>{e.currentTarget.style.background=primary?"#B51D30":C.bgHover; if(!primary)e.currentTarget.style.color=C.textPri;}}
       onMouseLeave={e=>{e.currentTarget.style.background=primary?C.red:"transparent"; if(!primary)e.currentTarget.style.color=C.textSec;}}
     >{children}</button>
@@ -332,8 +557,9 @@ function DemoDisclaimerMarquee() {
         overflow:"hidden",
         height:28,
       }}
+      className="ast-marquee-bar"
     >
-      <div className="demo-marquee-track" style={{ display:"flex", width:"max-content", alignItems:"center", height:"100%" }}>
+      <div className="demo-marquee-track ast-demo-marquee-track" style={{ display:"flex", width:"max-content", alignItems:"center", height:"100%" }}>
         {item}{item}
       </div>
     </div>
@@ -462,7 +688,7 @@ function ExportModal({ defaultName, content, title, onClose }) {
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.72)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,animation:"fadeIn 0.18s ease"}}
       onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
-      <div style={{background:C.bgPanel,border:`1px solid ${C.borderMid}`,borderRadius:12,padding:"28px 28px 24px",width:420,animation:"fadeUp 0.2s ease",boxShadow:"0 16px 48px rgba(0,0,0,0.6)"}}>
+      <div style={{background:C.bgPanel,border:`1px solid ${C.borderMid}`,borderRadius:12,padding:"28px 28px 24px",width:420,animation:"fadeUp 0.2s ease",boxShadow:"0 16px 48px rgba(0,0,0,0.6)"}} className="ast-export-modal">
         {/* header */}
         <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:20}}>
           <div style={{width:32,height:32,background:C.redFaint,border:`1px solid ${C.redGlow}`,borderRadius:7,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16}}>📄</div>
@@ -528,17 +754,22 @@ RULES:
 9. End every response with: "⚠ Research output only — verify with primary sources and consult a qualified advocate."`;
 
 function ResearchView() {
+  const { isMobile } = useContext(ViewportContext);
   const [messages,  setMessages]  = useState([]);
   const [streaming, setStreaming] = useState(false);
   const [streamText,setStreamText]= useState("");
   const [qval,      setQval]      = useState("");
-  const [showSrc,   setShowSrc]   = useState(true);
+  const [showSrc,   setShowSrc]   = useState(false);
   const [topic,     setTopic]     = useState("Legal Research");
   const [ikSources, setIkSources] = useState([]);
   const [ikLoading, setIkLoading] = useState(false);
   const [ikError,   setIkError]   = useState("");
   const [ikGrounded,setIkGrounded]= useState(null);   // null until the first query resolves
   const scrollRef = useRef(null);
+
+  useEffect(() => {
+    if (!isMobile) setShowSrc(true);
+  }, [isMobile]);
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -671,13 +902,13 @@ function ResearchView() {
 
   return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-      <div style={{height:52,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 22px",background:C.bgPanel,flexShrink:0}}>
-        <div style={{display:"flex",alignItems:"center",gap:8,fontSize:12}}>
+      <div className="ast-view-header" style={{height:52,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 22px",background:C.bgPanel,flexShrink:0}}>
+        <div className="ast-view-header-title" style={{display:"flex",alignItems:"center",gap:8,fontSize:12,minWidth:0}}>
           <span style={{color:C.textSec}}>Research</span><span style={{color:C.textMut}}>›</span>
           <span style={{color:C.textPri,maxWidth:240,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{topic}</span>
           {(streaming||ikLoading)&&<div style={{display:"flex",alignItems:"center",gap:5,marginLeft:4}}><div style={{width:5,height:5,borderRadius:"50%",background:ikLoading?C.gold:C.red,animation:"pulse 1s infinite"}}/><span style={{fontSize:9,color:ikLoading?C.gold:C.red,letterSpacing:"0.08em"}}>{ikLoading?"FETCHING CASES\u2026":"GENERATING\u2026"}</span></div>}
         </div>
-        <div style={{display:"flex",gap:7,alignItems:"center"}}>
+        <div className="ast-view-header-actions" style={{display:"flex",gap:7,alignItems:"center"}}>
           {/* Reflects the actual state of retrieval, so the badge never implies grounding that failed. */}
           {(()=>{ const ok=ikGrounded!==false, tone=ok?C.gold:C.amber;
             return (
@@ -686,14 +917,16 @@ function ResearchView() {
                 <span style={{fontSize:9,color:tone,letterSpacing:"0.07em",fontFamily:F.sans}}>{ok?"IndianKanoon Live":"Ungrounded"}</span>
               </div>
             ); })()}
-          <Btn onClick={demo}>↻ Demo Mode</Btn>
-          <Btn onClick={()=>setShowSrc(s=>!s)} style={showSrc?{borderColor:C.red,color:C.red,background:C.redFaint}:{}}>Sources</Btn>
+          <Btn onClick={demo} className="ast-hide-mobile">↻ Demo Mode</Btn>
+          <Btn onClick={()=>setShowSrc(s=>!s)} style={showSrc?{borderColor:C.red,color:C.red,background:C.redFaint}:{}}>
+            {showSrc?"Hide Sources":"Sources"}{ikSources.length>0?` (${ikSources.length})`:""}
+          </Btn>
         </div>
       </div>
 
       <div style={{flex:1,display:"flex",overflow:"hidden"}}>
         <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-          <div ref={scrollRef} style={{flex:1,overflowY:"auto",padding:"24px 28px"}}>
+          <div ref={scrollRef} className="ast-content-pad" style={{flex:1,overflowY:"auto",padding:"24px 28px"}}>
             {messages.length===0&&(
               <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100%",gap:14}}>
                 <div style={{width:48,height:48,background:C.redFaint,border:`1px solid ${C.redGlow}`,borderRadius:12,display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -712,7 +945,7 @@ function ResearchView() {
               <div key={mi} style={{marginBottom:20,animation:"fadeUp 0.3s ease"}}>
                 {msg.role==="user"?(
                   <div style={{display:"flex",justifyContent:"flex-end"}}>
-                    <div style={{maxWidth:"72%",background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:"10px 10px 2px 10px",padding:"11px 15px"}}>
+                    <div style={{maxWidth:"72%",background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:"10px 10px 2px 10px",padding:"11px 15px"}} className="ast-user-bubble">
                       <div style={{fontSize:9,color:C.textMut,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:5}}>Query</div>
                       <p style={{fontSize:13,color:C.textPri,lineHeight:1.6,fontFamily:F.sans,fontWeight:300}}>{msg.content}</p>
                     </div>
@@ -721,7 +954,7 @@ function ResearchView() {
                   <div style={{display:"flex",gap:12}}>
                     <Image src="/astreya-logo-dark.png" alt="" width={631} height={521}
                       style={{width:26,height:21,objectFit:"contain",flexShrink:0,marginTop:5}}/>
-                    <div style={{flex:1,maxWidth:680}}>
+                    <div style={{flex:1,maxWidth:680}} className="ast-answer-col">
                       <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
                         <span style={{fontSize:12,color:C.textPri,fontWeight:600}}>Astreya</span>
                         <span style={{fontSize:9,color:C.textMut,letterSpacing:"0.08em"}}>INDIAN LAW RESEARCH</span>
@@ -742,7 +975,7 @@ function ResearchView() {
               <div style={{display:"flex",gap:12,marginBottom:20}}>
                 <Image src="/astreya-logo-dark.png" alt="" width={631} height={521}
                   style={{width:26,height:21,objectFit:"contain",flexShrink:0,marginTop:3}}/>
-                <div style={{flex:1,maxWidth:680}}>
+                <div style={{flex:1,maxWidth:680}} className="ast-answer-col">
                   <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12}}>
                     <span style={{fontSize:12,color:C.textPri,fontWeight:600}}>Astreya</span>
                     {[0,1,2].map(i=><div key={i} style={{width:4,height:4,borderRadius:"50%",background:C.red,animation:`shimmer 1.2s ease ${i*0.2}s infinite`}}/>)}
@@ -752,12 +985,12 @@ function ResearchView() {
               </div>
             )}
           </div>
-          <div style={{padding:"13px 22px",borderTop:`1px solid ${C.border}`,background:C.bgPanel,flexShrink:0}}>
-            <div style={{display:"flex",gap:9,alignItems:"center"}}>
-              <div style={{flex:1,background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 13px",display:"flex",alignItems:"center",gap:9}} onFocusCapture={e=>e.currentTarget.style.borderColor=C.borderMid} onBlurCapture={e=>e.currentTarget.style.borderColor=C.border}>
+          <div className="ast-input-bar" style={{padding:"13px 22px",borderTop:`1px solid ${C.border}`,background:C.bgPanel,flexShrink:0}}>
+            <div className="ast-input-row" style={{display:"flex",gap:9,alignItems:"center"}}>
+              <div style={{flex:1,background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:8,padding:"9px 13px",display:"flex",alignItems:"center",gap:9,minWidth:0}} onFocusCapture={e=>e.currentTarget.style.borderColor=C.borderMid} onBlurCapture={e=>e.currentTarget.style.borderColor=C.border}>
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.textMut} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                <input value={qval} onChange={e=>setQval(e.target.value)} onKeyDown={handleKey} placeholder="Ask a legal question…" style={{flex:1,background:"transparent",border:"none",outline:"none",fontSize:12.5,color:C.textPri,fontFamily:F.sans,fontWeight:300}} disabled={streaming}/>
-                <div style={{display:"flex",gap:5}}>{["CrPC","BNS","IBC","DPDP"].map(t=><span key={t} onClick={()=>!streaming&&setQval(v=>v+" "+t)} style={{fontSize:9,color:C.textMut,background:C.bgHover,border:`1px solid ${C.border}`,borderRadius:3,padding:"2px 6px",cursor:streaming?"not-allowed":"pointer"}}>{t}</span>)}</div>
+                <input value={qval} onChange={e=>setQval(e.target.value)} onKeyDown={handleKey} placeholder="Ask a legal question…" style={{flex:1,background:"transparent",border:"none",outline:"none",fontSize:12.5,color:C.textPri,fontFamily:F.sans,fontWeight:300,minWidth:0}} disabled={streaming}/>
+                <div className="ast-input-tags" style={{display:"flex",gap:5}}>{["CrPC","BNS","IBC","DPDP"].map(t=><span key={t} onClick={()=>!streaming&&setQval(v=>v+" "+t)} style={{fontSize:9,color:C.textMut,background:C.bgHover,border:`1px solid ${C.border}`,borderRadius:3,padding:"2px 6px",cursor:streaming?"not-allowed":"pointer"}}>{t}</span>)}</div>
               </div>
               <Btn primary onClick={()=>search(qval)} style={{opacity:streaming?0.5:1,cursor:streaming?"not-allowed":"pointer"}}>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -769,13 +1002,16 @@ function ResearchView() {
         </div>
 
         {showSrc&&(
-          <div style={{width:272,borderLeft:`1px solid ${C.border}`,background:C.bgPanel,display:"flex",flexDirection:"column",overflow:"hidden",animation:"slideIn 0.22s ease"}}>
+          <>
+            {isMobile&&<div className="ast-panel-overlay-backdrop" onClick={()=>setShowSrc(false)} aria-hidden="true"/>}
+            <div className={`ast-panel-r${isMobile?"":" ast-panel-r-narrow"}`} style={{width:272,borderLeft:`1px solid ${C.border}`,background:C.bgPanel,display:"flex",flexDirection:"column",overflow:"hidden",animation:"slideIn 0.22s ease"}}>
             <div style={{padding:"13px 14px",borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}>
                 <div style={{fontSize:9,color:C.textMut,letterSpacing:"0.13em",textTransform:"uppercase"}}>IndianKanoon Results</div>
                 <div style={{display:"flex",alignItems:"center",gap:6}}>
                   {ikLoading&&<Spinner/>}
                   {ikSources.length>0&&<span style={{fontSize:10,color:C.gold,fontWeight:600}}>{ikSources.length}</span>}
+                  {isMobile&&<button type="button" onClick={()=>setShowSrc(false)} aria-label="Close sources" style={{background:"transparent",border:"none",color:C.textMut,cursor:"pointer",fontSize:18,lineHeight:1,padding:"0 4px"}}>×</button>}
                 </div>
               </div>
               <div style={{display:"flex",alignItems:"center",gap:5,padding:"4px 8px",background:`${C.gold}0A`,border:`1px solid ${C.gold}22`,borderRadius:4}}>
@@ -846,6 +1082,7 @@ function ResearchView() {
               </div>
             </div>
           </div>
+          </>
         )}
       </div>
     </div>
@@ -997,13 +1234,15 @@ function DraftingView() {
   /* ─ SELECT ─ */
   if (stage==="select") return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-      <div style={{height:52,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 22px",background:C.bgPanel,flexShrink:0}}>
-        <div style={{display:"flex",alignItems:"center",gap:8,fontSize:12}}>
+      <div className="ast-view-header" style={{height:52,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 22px",background:C.bgPanel,flexShrink:0}}>
+        <div className="ast-view-header-title" style={{display:"flex",alignItems:"center",gap:8,fontSize:12}}>
           <span style={{color:C.textSec}}>Drafting</span><span style={{color:C.textMut}}>›</span><span style={{color:C.textPri}}>Select Document Type</span>
         </div>
-        <Btn onClick={demo}>↻ Demo Mode</Btn>
+        <div className="ast-view-header-actions" style={{display:"flex",gap:7,alignItems:"center"}}>
+          <Btn onClick={demo} className="ast-hide-mobile">↻ Demo Mode</Btn>
+        </div>
       </div>
-      <div style={{flex:1,overflowY:"auto",padding:"30px 34px"}}>
+      <div className="ast-content-pad-lg" style={{flex:1,overflowY:"auto",padding:"30px 34px"}}>
         <div style={{marginBottom:26}}>
           <div style={{fontFamily:F.serif,fontSize:26,fontWeight:600,color:C.textPri,marginBottom:5}}>What would you like to draft?</div>
           <p style={{fontSize:13,color:C.textSec,fontFamily:F.sans,fontWeight:300}}>Select a document type. Astreya will draft a complete, India-law-compliant agreement in seconds — then let you refine every clause.</p>
@@ -1014,7 +1253,7 @@ function DraftingView() {
           return (
             <div key={cat} style={{marginBottom:22}}>
               <Label>{cat}</Label>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(205px,1fr))",gap:9}}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(205px,1fr))",gap:9}} className="ast-doc-grid">
                 {types.map(dt=>(
                   <div key={dt.id} onClick={()=>{setDocType(dt.id);setForm({});setNotes("");setStage("intake");}}
                     style={{background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:9,padding:"15px 17px",cursor:"pointer",transition:"all 0.15s",animation:"fadeUp 0.3s ease both"}}
@@ -1037,18 +1276,18 @@ function DraftingView() {
   /* ─ INTAKE ─ */
   if (stage==="intake") return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-      <div style={{height:52,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 22px",background:C.bgPanel,flexShrink:0}}>
-        <div style={{display:"flex",alignItems:"center",gap:8,fontSize:12}}>
+      <div className="ast-view-header" style={{height:52,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 22px",background:C.bgPanel,flexShrink:0}}>
+        <div className="ast-view-header-title" style={{display:"flex",alignItems:"center",gap:8,fontSize:12,minWidth:0}}>
           <span onClick={()=>setStage("select")} style={{color:C.textSec,cursor:"pointer"}} onMouseEnter={e=>e.target.style.color=C.textPri} onMouseLeave={e=>e.target.style.color=C.textSec}>Drafting</span>
-          <span style={{color:C.textMut}}>›</span><span style={{color:C.textPri}}>{dtInfo?.label}</span>
+          <span style={{color:C.textMut}}>›</span><span style={{color:C.textPri,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{dtInfo?.label}</span>
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:9}}>
+        <div className="ast-intake-actions ast-view-header-actions" style={{display:"flex",alignItems:"center",gap:9}}>
           <span style={{fontSize:11,color:pct===100?C.green:C.textMut,fontFamily:F.sans}}>{pct}% complete</span>
           <Btn onClick={()=>setStage("select")}>← Back</Btn>
           <Btn primary onClick={generate}>Generate Draft →</Btn>
         </div>
       </div>
-      <div style={{flex:1,overflowY:"auto",padding:"26px 34px"}}>
+      <div className="ast-content-pad-lg" style={{flex:1,overflowY:"auto",padding:"26px 34px"}}>
         <div style={{maxWidth:660}}>
           {/* header card */}
           <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:22,padding:"14px 17px",background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:9}}>
@@ -1147,7 +1386,7 @@ function DraftingView() {
           </div>
         </div>
         {/* status sidebar */}
-        <div style={{width:220,borderLeft:`1px solid ${C.border}`,background:C.bgPanel,padding:"18px 15px"}}>
+        <div className="ast-editor-side ast-panel-r-narrow" style={{width:220,borderLeft:`1px solid ${C.border}`,background:C.bgPanel,padding:"18px 15px"}}>
           <Label>Generation Status</Label>
           {[
             {l:"Recitals & Definitions",done:progress>12},
@@ -1246,7 +1485,7 @@ function DraftingView() {
         </div>
 
         {/* right meta panel */}
-        <div style={{width:224,borderLeft:`1px solid ${C.border}`,background:C.bgPanel,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+        <div className="ast-editor-side ast-panel-r-narrow" style={{width:224,borderLeft:`1px solid ${C.border}`,background:C.bgPanel,display:"flex",flexDirection:"column",overflow:"hidden"}}>
           <div style={{flex:1,overflowY:"auto",padding:"15px 13px"}}>
             <Label>Document Info</Label>
             <div style={{background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:8,padding:"12px 13px",marginBottom:15}}>
@@ -1542,18 +1781,18 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
   return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
       {/* topbar */}
-      <div style={{height:52,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 20px",background:C.bgPanel,flexShrink:0}}>
-        <div style={{display:"flex",alignItems:"center",gap:8,fontSize:12}}>
+      <div className="ast-view-header" style={{height:52,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 20px",background:C.bgPanel,flexShrink:0}}>
+        <div className="ast-view-header-title" style={{display:"flex",alignItems:"center",gap:8,fontSize:12,minWidth:0,flexWrap:"wrap"}}>
           <span onClick={()=>setStage("upload")} style={{color:C.textSec,cursor:"pointer"}} onMouseEnter={e=>e.target.style.color=C.textPri} onMouseLeave={e=>e.target.style.color=C.textSec}>Due Diligence</span>
           <span style={{color:C.textMut}}>›</span>
-          <span style={{color:C.textPri}}>{results?.contract_type_detected || contractType || "Contract"}</span>
+          <span style={{color:C.textPri,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:180}}>{results?.contract_type_detected || contractType || "Contract"}</span>
           <span style={{color:C.textMut,margin:"0 4px"}}>·</span>
           <div style={{display:"flex",alignItems:"center",gap:5}}>
             <div style={{width:6,height:6,borderRadius:"50%",background:scoreColor,animation:"pulse 2s infinite"}}/>
             <span style={{fontSize:9,color:scoreColor,letterSpacing:"0.08em",fontWeight:600}}>RISK {results?.overall_score?.toFixed(1)}/10</span>
           </div>
         </div>
-        <div style={{display:"flex",gap:7}}>
+        <div className="ast-view-header-actions ast-filter-row" style={{display:"flex",gap:7}}>
           {["ALL","CRITICAL","HIGH","MEDIUM","LOW"].map(lvl=>(
             <div key={lvl} onClick={()=>setFilterLevel(lvl)}
               style={{padding:"4px 10px",borderRadius:4,border:`1px solid ${filterLevel===lvl?(RISK_COLORS[lvl]||C.red):C.border}`,background:filterLevel===lvl?(RISK_BG[lvl]||C.redFaint):"transparent",fontSize:9,color:filterLevel===lvl?(RISK_COLORS[lvl]||C.red):C.textMut,cursor:"pointer",letterSpacing:"0.07em",fontFamily:F.sans,fontWeight:600,transition:"all 0.15s"}}>
@@ -1566,10 +1805,10 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
         </div>
       </div>
 
-      <div style={{flex:1,display:"flex",overflow:"hidden"}}>
+      <div className="ast-three-col" style={{flex:1,display:"flex",overflow:"hidden"}}>
 
         {/* ── LEFT: risk list ── */}
-        <div style={{width:308,borderRight:`1px solid ${C.border}`,background:C.bgPanel,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+        <div className="ast-panel-l ast-panel-l-narrow" style={{width:308,borderRight:`1px solid ${C.border}`,background:C.bgPanel,display:"flex",flexDirection:"column",overflow:"hidden"}}>
           {/* score summary */}
           <div style={{padding:"16px 16px 12px",borderBottom:`1px solid ${C.border}`}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
@@ -1627,7 +1866,7 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
         </div>
 
         {/* ── CENTRE: active risk detail ── */}
-        <div style={{flex:1,overflowY:"auto",padding:"24px 28px"}}>
+        <div className="ast-content-pad ast-split-detail" style={{flex:1,overflowY:"auto",padding:"24px 28px",minWidth:0}}>
           {!activeRisk ? (
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100%",gap:10,color:C.textMut}}>
               <div style={{fontSize:24}}>⚑</div>
@@ -1688,7 +1927,7 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
         </div>
 
         {/* ── RIGHT: summary panel ── */}
-        <div style={{width:228,borderLeft:`1px solid ${C.border}`,background:C.bgPanel,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+        <div className="ast-panel-r-inline ast-panel-r-narrow" style={{width:228,borderLeft:`1px solid ${C.border}`,background:C.bgPanel,display:"flex",flexDirection:"column",overflow:"hidden"}}>
           <div style={{flex:1,overflowY:"auto",padding:"15px 14px"}}>
             {/* executive summary */}
             <div style={{fontSize:9,color:C.textMut,letterSpacing:"0.13em",textTransform:"uppercase",marginBottom:7}}>Executive Summary</div>
@@ -1928,7 +2167,7 @@ NOTES: ${form.notes||"None"}`;
             {renderMd(report)}
           </div>
         </div>
-        <div style={{width:210,borderLeft:`1px solid ${C.border}`,background:C.bgPanel,padding:"16px 14px",overflowY:"auto"}}>
+        <div className="ast-editor-side ast-panel-r-narrow" style={{width:210,borderLeft:`1px solid ${C.border}`,background:C.bgPanel,padding:"16px 14px",overflowY:"auto"}}>
           <div style={{fontSize:9,color:C.textMut,letterSpacing:"0.13em",textTransform:"uppercase",marginBottom:10}}>Matter Details</div>
           {[["Position",form.position],["Court",form.court],["Domain",form.domain],["Opponent",form.opponent]].map(([k,v])=>v&&(
             <div key={k} style={{marginBottom:10,padding:"8px 10px",background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:6}}>
@@ -2135,7 +2374,7 @@ Special Notes: ${form.notes||"None"}`;
             {renderMd(report)}
           </div>
         </div>
-        <div style={{width:210,borderLeft:`1px solid ${C.border}`,background:C.bgPanel,padding:"16px 14px",overflowY:"auto"}}>
+        <div className="ast-editor-side ast-panel-r-narrow" style={{width:210,borderLeft:`1px solid ${C.border}`,background:C.bgPanel,padding:"16px 14px",overflowY:"auto"}}>
           <div style={{fontSize:9,color:C.textMut,letterSpacing:"0.13em",textTransform:"uppercase",marginBottom:10}}>Entity Profile</div>
           {[["Entity",form.entity_type],["State",form.state],["Employees",form.employees],["Turnover",form.turnover]].map(([k,v])=>v&&(
             <div key={k} style={{marginBottom:9,padding:"8px 10px",background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:6}}>
@@ -2238,21 +2477,21 @@ function HistoryView() {
   return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
       {/* topbar */}
-      <div style={{height:52,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 22px",background:C.bgPanel,flexShrink:0}}>
-        <div style={{display:"flex",alignItems:"center",gap:8,fontSize:12}}>
+      <div className="ast-view-header" style={{height:52,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 22px",background:C.bgPanel,flexShrink:0}}>
+        <div className="ast-view-header-title" style={{display:"flex",alignItems:"center",gap:8,fontSize:12,minWidth:0}}>
           <span style={{color:C.textPri}}>History</span>
           {drafts!==null && <span style={{color:C.textMut,marginLeft:2}}>— {drafts.length} draft{drafts.length!==1?"s":""}</span>}
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:6,fontSize:9,color:C.textMut,fontFamily:F.sans}}>
+        <div className="ast-view-header-actions ast-hide-mobile" style={{display:"flex",alignItems:"center",gap:6,fontSize:9,color:C.textMut,fontFamily:F.sans}}>
           <div style={{width:6,height:6,borderRadius:"50%",background:C.green}}/>
           Drafts saved automatically
         </div>
       </div>
 
-      <div style={{flex:1,display:"flex",overflow:"hidden"}}>
+      <div className="ast-split-row" style={{flex:1,display:"flex",overflow:"hidden"}}>
 
         {/* ── list ── */}
-        <div style={{width:sel?316:"100%",borderRight:sel?`1px solid ${C.border}`:"none",display:"flex",flexDirection:"column",overflow:"hidden",transition:"width 0.22s",flexShrink:0}}>
+        <div className="ast-split-list" style={{width:sel?316:"100%",borderRight:sel?`1px solid ${C.border}`:"none",display:"flex",flexDirection:"column",overflow:"hidden",transition:"width 0.22s",flexShrink:0}}>
 
           <div style={{padding:"10px 12px",borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
             <div style={{display:"flex",alignItems:"center",gap:8,background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:6,padding:"7px 11px",marginBottom:8}}>
@@ -2322,7 +2561,7 @@ function HistoryView() {
 
         {/* ── detail panel ── */}
         {sel && (
-          <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",animation:"slideIn 0.2s ease"}}>
+          <div className="ast-split-detail" style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",animation:"slideIn 0.2s ease"}}>
             <div style={{padding:"12px 20px",borderBottom:`1px solid ${C.border}`,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
               <div style={{display:"flex",alignItems:"center",gap:10,minWidth:0}}>
                 <span style={{fontSize:22,flexShrink:0}}>{sel.typeIcon||"📝"}</span>
@@ -2365,7 +2604,7 @@ function HistoryView() {
                 )}
               </div>
               {/* meta sidebar */}
-              <div style={{width:196,borderLeft:`1px solid ${C.border}`,background:C.bgPanel,padding:"14px 12px",overflowY:"auto",flexShrink:0}}>
+              <div className="ast-editor-side ast-panel-r-narrow" style={{width:196,borderLeft:`1px solid ${C.border}`,background:C.bgPanel,padding:"14px 12px",overflowY:"auto",flexShrink:0}}>
                 <Label>Details</Label>
                 {[["Type",sel.typeLabel],["Category",sel.category||"—"],["Governing",sel.form?.governing||"—"],["Words",(sel.wordCount||0).toLocaleString()],["Saved",new Date(sel.createdAt).toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"numeric"})]].map(([k,v])=>(
                   <div key={k} style={{marginBottom:9,padding:"7px 9px",background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:6}}>
@@ -2419,14 +2658,14 @@ function MattersView() {
 
   return(
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-      <div style={{height:52,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 22px",background:C.bgPanel,flexShrink:0}}>
-        <div style={{display:"flex",alignItems:"center",gap:8,fontSize:12}}><span style={{color:C.textPri}}>My Matters</span><span style={{color:C.textMut,marginLeft:4}}>— {MATTER_DATA.length} total</span></div>
-        <button style={{padding:"6px 14px",background:C.red,border:"none",borderRadius:6,color:"#fff",fontSize:11,cursor:"pointer",fontFamily:F.sans,fontWeight:500}}>+ New Matter</button>
+      <div className="ast-view-header" style={{height:52,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 22px",background:C.bgPanel,flexShrink:0}}>
+        <div className="ast-view-header-title" style={{display:"flex",alignItems:"center",gap:8,fontSize:12,minWidth:0}}><span style={{color:C.textPri}}>My Matters</span><span style={{color:C.textMut,marginLeft:4}}>— {MATTER_DATA.length} total</span></div>
+        <div className="ast-view-header-actions"><button style={{padding:"6px 14px",background:C.red,border:"none",borderRadius:6,color:"#fff",fontSize:11,cursor:"pointer",fontFamily:F.sans,fontWeight:500}}>+ New Matter</button></div>
       </div>
 
-      <div style={{flex:1,display:"flex",overflow:"hidden"}}>
+      <div className="ast-split-row" style={{flex:1,display:"flex",overflow:"hidden"}}>
         {/* list */}
-        <div style={{width:sel?300:"100%",borderRight:sel?`1px solid ${C.border}`:"none",display:"flex",flexDirection:"column",overflow:"hidden",transition:"width 0.2s"}}>
+        <div className="ast-split-list" style={{width:sel?300:"100%",borderRight:sel?`1px solid ${C.border}`:"none",display:"flex",flexDirection:"column",overflow:"hidden",transition:"width 0.2s"}}>
           {/* stats bar */}
           <div style={{display:"flex",gap:0,borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
             {[["ALL",stats.total,"All"],["OPEN",stats.active+stats.urgent,"Open"],["URGENT",stats.urgent,"Urgent"],["CLOSED",stats.closed,"Closed"]].map(([f,n,l])=>(
@@ -2472,7 +2711,7 @@ function MattersView() {
 
         {/* detail panel */}
         {sel&&(
-          <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",animation:"slideIn 0.2s ease"}}>
+          <div className="ast-split-detail" style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",animation:"slideIn 0.2s ease"}}>
             <div style={{padding:"16px 22px",borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
               <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:12}}>
                 <div>
@@ -2537,11 +2776,29 @@ function MattersView() {
    ROOT APP
 ══════════════════════════════════════════════ */
 export default function AstreyaApp() {
+  const viewport = useViewport();
+  const { isMobile, isTablet } = viewport;
   const [nav, setNav]           = useState("research");
   const [matter, setMatter]     = useState("m1");
   const [mOpen, setMOpen]       = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const m = MATTERS.find(x=>x.id===matter);
+
+  const goNav = useCallback((id) => {
+    setNav(id);
+    setMenuOpen(false);
+  }, []);
+
+  const MOBILE_TABS = [
+    { id: "research", label: "Research" },
+    { id: "draft", label: "Draft" },
+    { id: "review", label: "Review" },
+    { id: "history", label: "History" },
+    { id: "matters", label: "Matters" },
+  ];
+
+  const currentLabel = NAV.find(x => x.id === nav)?.label || "Astreya";
 
   const NavIcon = ({id}) => {
     const icons = {
@@ -2556,32 +2813,48 @@ export default function AstreyaApp() {
     return icons[id] || null;
   };
 
-  const sideW   = collapsed ? 52 : 232;
+  const sideW   = (isMobile || collapsed) ? (isMobile ? 0 : 52) : (isTablet ? 188 : 232);
   const sideTransition = "width 0.22s cubic-bezier(0.4,0,0.2,1)";
 
   return (
-    <div style={{fontFamily:F.sans,background:C.bg,height:"100vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+    <ViewportContext.Provider value={viewport}>
+    <div className="ast-root" style={{fontFamily:F.sans,background:C.bg,height:"100vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
       <style>{FONT_IMPORT}</style>
       <DemoDisclaimerMarquee />
 
-      <div style={{flex:1,display:"flex",overflow:"hidden",minHeight:0}}>
+      <div
+        className={`ast-backdrop${menuOpen ? " ast-visible" : ""}`}
+        onClick={() => setMenuOpen(false)}
+        aria-hidden={!menuOpen}
+      />
+
+      <div className="ast-shell" style={{flex:1,display:"flex",overflow:"hidden",minHeight:0}}>
 
       {/* ── SIDEBAR ── */}
-      <div style={{width:sideW,minWidth:sideW,background:C.bgPanel,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",flexShrink:0,overflow:"hidden",transition:sideTransition}}>
+      <div
+        className={`ast-sidebar${menuOpen ? " ast-open" : ""}${!collapsed && !isMobile ? " ast-sidebar-expanded" : ""}`}
+        style={{width:sideW,minWidth:isMobile?0:sideW,background:C.bgPanel,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",flexShrink:0,overflow:"hidden",transition:sideTransition}}
+      >
 
         {/* logo row */}
         <div style={{padding:collapsed?"11px 0":"19px 19px 16px",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:collapsed?"center":"space-between",gap:10,flexShrink:0}}>
           <div title={collapsed?"Expand":undefined} style={{display:"flex",alignItems:"center",gap:10,overflow:"hidden",cursor:collapsed?"pointer":"default",minWidth:0}} onClick={()=>{ if(collapsed) setCollapsed(false); }}>
             <Image src="/astreya-logo-dark.png" alt="Astreya" width={631} height={521} priority
               style={{width:29,height:24,objectFit:"contain",flexShrink:0}}/>
-            {!collapsed && (
+            {!collapsed && !isMobile && (
+              <div style={{animation:"fadeUp 0.18s ease",minWidth:0}}>
+                <div style={{fontFamily:F.serif,fontSize:20,fontWeight:700,color:C.textPri,letterSpacing:"0.18em",textTransform:"uppercase",whiteSpace:"nowrap"}}>Astreya</div>
+                <div style={{fontSize:8,color:C.textMut,letterSpacing:"0.22em",textTransform:"uppercase",marginTop:-2,fontFamily:F.sans,whiteSpace:"nowrap"}}>Indian Legal AI</div>
+              </div>
+            )}
+            {isMobile && (
               <div style={{animation:"fadeUp 0.18s ease",minWidth:0}}>
                 <div style={{fontFamily:F.serif,fontSize:20,fontWeight:700,color:C.textPri,letterSpacing:"0.18em",textTransform:"uppercase",whiteSpace:"nowrap"}}>Astreya</div>
                 <div style={{fontSize:8,color:C.textMut,letterSpacing:"0.22em",textTransform:"uppercase",marginTop:-2,fontFamily:F.sans,whiteSpace:"nowrap"}}>Indian Legal AI</div>
               </div>
             )}
           </div>
-          {!collapsed && (
+          {!collapsed && !isMobile && (
             <button onClick={()=>setCollapsed(true)} title="Collapse"
               style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:5,padding:"4px 5px",cursor:"pointer",color:C.textMut,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.15s"}}
               onMouseEnter={e=>{e.currentTarget.style.borderColor=C.borderMid;e.currentTarget.style.color=C.textPri;}}
@@ -2589,10 +2862,16 @@ export default function AstreyaApp() {
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
             </button>
           )}
+          {isMobile && (
+            <button type="button" onClick={()=>setMenuOpen(false)} aria-label="Close menu"
+              style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:5,padding:"4px 8px",cursor:"pointer",color:C.textMut,fontSize:18,lineHeight:1,flexShrink:0}}>
+              ×
+            </button>
+          )}
         </div>
 
         {/* matter picker */}
-        {!collapsed && (
+        {(!collapsed || isMobile) && (
           <div style={{padding:"10px 12px",borderBottom:`1px solid ${C.border}`,animation:"fadeUp 0.18s ease",flexShrink:0}}>
             <div style={{fontSize:9,color:C.textMut,letterSpacing:"0.13em",textTransform:"uppercase",marginBottom:6}}>Active Matter</div>
             <div onClick={()=>setMOpen(o=>!o)} style={{background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:6,padding:"8px 10px",cursor:"pointer"}}>
@@ -2627,31 +2906,31 @@ export default function AstreyaApp() {
             const active=nav===item.id;
             return (
               <div key={item.id}
-                onClick={()=>{ setNav(item.id); if(collapsed) setCollapsed(false); }}
-                title={collapsed?item.label:undefined}
-                style={{display:"flex",alignItems:"center",gap:collapsed?0:9,padding:collapsed?"10px 0":"9px 10px",justifyContent:collapsed?"center":"flex-start",borderRadius:7,marginBottom:2,cursor:"pointer",background:active?C.redFaint:"transparent",border:`1px solid ${active?C.redGlow:"transparent"}`,color:active?C.red:C.textSec,transition:"all 0.15s"}}
+                onClick={()=>{ goNav(item.id); if(collapsed && !isMobile) setCollapsed(false); }}
+                title={collapsed && !isMobile ? item.label : undefined}
+                style={{display:"flex",alignItems:"center",gap:(collapsed && !isMobile)?0:9,padding:(collapsed && !isMobile)?"10px 0":"9px 10px",justifyContent:(collapsed && !isMobile)?"center":"flex-start",borderRadius:7,marginBottom:2,cursor:"pointer",background:active?C.redFaint:"transparent",border:`1px solid ${active?C.redGlow:"transparent"}`,color:active?C.red:C.textSec,transition:"all 0.15s"}}
                 onMouseEnter={e=>{if(!active)e.currentTarget.style.background=C.bgHover;}}
                 onMouseLeave={e=>{if(!active)e.currentTarget.style.background="transparent";}}>
                 <div style={{flexShrink:0}}><NavIcon id={item.id}/></div>
-                {!collapsed && <span style={{fontSize:12,fontWeight:active?500:400,whiteSpace:"nowrap",animation:"fadeUp 0.15s ease"}}>{item.label}</span>}
-                {!collapsed && active && <div style={{marginLeft:"auto",width:4,height:4,borderRadius:"50%",background:C.red,flexShrink:0}}/>}
+                {!collapsed || isMobile ? <span style={{fontSize:12,fontWeight:active?500:400,whiteSpace:"nowrap",animation:"fadeUp 0.15s ease"}}>{item.label}</span> : null}
+                {(!collapsed || isMobile) && active && <div style={{marginLeft:"auto",width:4,height:4,borderRadius:"50%",background:C.red,flexShrink:0}}/>}
               </div>
             );
           })}
         </nav>
 
         {/* user */}
-        <div style={{padding:collapsed?"10px 0":"12px 13px",borderTop:`1px solid ${C.border}`,flexShrink:0}}>
-          <div style={{display:"flex",alignItems:"center",gap:collapsed?0:8,justifyContent:collapsed?"center":"flex-start"}}>
+        <div style={{padding:(collapsed && !isMobile)?"10px 0":"12px 13px",borderTop:`1px solid ${C.border}`,flexShrink:0}}>
+          <div style={{display:"flex",alignItems:"center",gap:(collapsed && !isMobile)?0:8,justifyContent:(collapsed && !isMobile)?"center":"flex-start"}}>
             <div style={{width:26,height:26,borderRadius:"50%",background:"#1E2030",border:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:C.textSec,fontWeight:600,flexShrink:0}}>HG</div>
-            {!collapsed && (
+            {(!collapsed || isMobile) && (
               <div style={{animation:"fadeUp 0.18s ease",overflow:"hidden"}}>
                 <div style={{fontSize:11,color:C.textPri,fontWeight:500,whiteSpace:"nowrap"}}>Harold Gunderson</div>
                 <div style={{fontSize:9,color:C.textMut,whiteSpace:"nowrap"}}>Senior Associate</div>
               </div>
             )}
           </div>
-          {!collapsed && (
+          {(!collapsed || isMobile) && (
             <div
               title="Gemma 4 served securely through Google AI Studio"
               style={{ display:"flex", alignItems:"center", gap:5, marginTop:7,
@@ -2667,16 +2946,43 @@ export default function AstreyaApp() {
       </div>
 
       {/* ── MAIN ── */}
-      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",position:"relative"}}>
-        {nav==="research" && <ResearchView/>}
-        {nav==="draft"    && <DraftingView/>}
-        {nav==="review"   && <RiskReviewView/>}
-        {nav==="litigate" && <LitigationView/>}
-        {nav==="comply"   && <ComplianceView/>}
-        {nav==="history"  && <HistoryView/>}
-        {nav==="matters"  && <MattersView/>}
+      <div className="ast-main-stack" style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",position:"relative",minWidth:0}}>
+        <div className="ast-mobile-top">
+          <button type="button" className="ast-mobile-menu-btn" onClick={()=>setMenuOpen(true)} aria-label="Open menu">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          </button>
+          <div style={{minWidth:0,flex:1}}>
+            <div style={{fontFamily:F.serif,fontSize:15,fontWeight:600,color:C.textPri,lineHeight:1.2}}>{currentLabel}</div>
+            <div style={{fontSize:9,color:C.textMut,letterSpacing:"0.08em",marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m?.code} · {m?.label}</div>
+          </div>
+        </div>
+
+        <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}}>
+          {nav==="research" && <ResearchView/>}
+          {nav==="draft"    && <DraftingView/>}
+          {nav==="review"   && <RiskReviewView/>}
+          {nav==="litigate" && <LitigationView/>}
+          {nav==="comply"   && <ComplianceView/>}
+          {nav==="history"  && <HistoryView/>}
+          {nav==="matters"  && <MattersView/>}
+        </div>
+
+        <nav className="ast-bottom-nav" aria-label="Primary">
+          {MOBILE_TABS.map(tab => (
+            <button
+              key={tab.id}
+              type="button"
+              className={`ast-bottom-nav-item${nav === tab.id ? " ast-active" : ""}`}
+              onClick={() => goNav(tab.id)}
+            >
+              <NavIcon id={tab.id}/>
+              {tab.label}
+            </button>
+          ))}
+        </nav>
       </div>
       </div>
     </div>
+    </ViewportContext.Provider>
   );
 }
