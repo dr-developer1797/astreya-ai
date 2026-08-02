@@ -1,3 +1,5 @@
+import { isAbortError } from "./errors";
+
 // Raising this does not buy a longer document: the model's hidden thought step expands to
 // fill whatever budget it is given (at 2400 it ran ~43s before any text appeared, versus
 // ~31s at 2000, and no run of nine reached a signature block), and 2400 tokens already
@@ -21,7 +23,7 @@ export async function describeFailure(res) {
   return detail ? `API ${res.status} — ${detail.slice(0, 300)}` : `API ${res.status}`;
 }
 
-export async function callLLM({ sys, messages, stream = true }) {
+export async function callLLM({ sys, messages, stream = true, signal }) {
   const init = {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -31,12 +33,14 @@ export async function callLLM({ sys, messages, stream = true }) {
       stream,
       max_tokens: MAX_TOKENS,
     }),
+    signal,
   };
 
   let res;
   try {
     res = await fetch("/api/chat", init);
-  } catch {
+  } catch (err) {
+    if (isAbortError(err)) throw err;
     throw new Error("Could not reach the Astreya Gemma API — check the deployment and try again");
   }
   if (!res.ok) throw new Error(await describeFailure(res));

@@ -1,34 +1,47 @@
 import { countWords } from "@/shared/utils/text";
 
+const INDEX_KEY = "astreya_drafts_index";
+const draftKey = (id) => `astreya_draft_${id}`;
+
+function readIndex() {
+  try {
+    const raw = localStorage.getItem(INDEX_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeIndex(ids) {
+  localStorage.setItem(INDEX_KEY, JSON.stringify(ids.slice(0, 100)));
+}
+
 export async function saveDraft(entry) {
   const draftId = entry.id || `draft_${Date.now()}`;
   const payload = JSON.stringify({
     ...entry,
     id: draftId,
+    matterId: entry.matterId ?? null,
     wordCount: entry.wordCount ?? countWords(entry.content || ""),
   });
-  await window.storage.set(draftId, payload);
-  let idx = [];
-  try {
-    const r = await window.storage.get("drafts_index");
-    if (r) idx = JSON.parse(r.value);
-  } catch {}
+  localStorage.setItem(draftKey(draftId), payload);
+  const idx = readIndex().filter((id) => id !== draftId);
   idx.unshift(draftId);
-  await window.storage.set("drafts_index", JSON.stringify(idx.slice(0, 100)));
+  writeIndex(idx);
   return draftId;
 }
 
 export async function listDrafts() {
   try {
-    const idxRes = await window.storage.get("drafts_index");
-    if (!idxRes) return [];
-    const ids = JSON.parse(idxRes.value);
+    const ids = readIndex();
     const loaded = [];
     for (const id of ids) {
       try {
-        const r = await window.storage.get(id);
-        if (r) loaded.push(JSON.parse(r.value));
-      } catch {}
+        const raw = localStorage.getItem(draftKey(id));
+        if (raw) loaded.push(JSON.parse(raw));
+      } catch {
+        /* skip corrupt entry */
+      }
     }
     return loaded;
   } catch {
@@ -37,11 +50,6 @@ export async function listDrafts() {
 }
 
 export async function deleteDraft(id) {
-  await window.storage.delete(id);
-  let idx = [];
-  try {
-    const r = await window.storage.get("drafts_index");
-    if (r) idx = JSON.parse(r.value);
-  } catch {}
-  await window.storage.set("drafts_index", JSON.stringify(idx.filter((x) => x !== id)));
+  localStorage.removeItem(draftKey(id));
+  writeIndex(readIndex().filter((x) => x !== id));
 }

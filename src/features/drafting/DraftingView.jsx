@@ -5,29 +5,60 @@ import { C, F } from "@/shared/constants/theme";
 import Btn from "@/shared/ui/Btn";
 import Spinner from "@/shared/ui/Spinner";
 import Label from "@/shared/ui/Label";
+import Field from "@/shared/ui/Field";
+import ReminderCard from "@/shared/ui/ReminderCard";
+import ViewHeader from "@/shared/ui/ViewHeader";
 import ExportModal from "@/shared/modals/ExportModal";
 import { callLLM, extractResponse } from "@/shared/llm/client";
-import { streamChatCompletion } from "@/shared/llm/stream";
+import { useLLMStream } from "@/shared/hooks/useLLMStream";
 import { DOC_TYPES, INTAKE } from "@/shared/constants/documents";
 import { DEMO_DRAFT } from "@/features/drafting/demo";
 import { saveDraft } from "@/shared/storage/drafts";
 import { countWords } from "@/shared/utils/text";
 import { useFormState } from "@/shared/hooks/useFormState";
+import { useTimeoutCleanup } from "@/shared/hooks/useTimeoutCleanup";
+import { useMatter } from "@/shared/context/MatterContext";
+
+const CHECKLIST_ITEMS = [
+  "Parties correctly identified",
+  "Governing law clause present",
+  "Dispute resolution mechanism",
+  "Execution / signature block",
+  "Stamp duty obligation checked",
+  "Annexures complete",
+];
 
 export default function DraftingView() {
+  const { matterId } = useMatter();
+  const { streaming, text: streamPreview, progress, stream, reset } = useLLMStream();
+  const { scheduleTimeout } = useTimeoutCleanup();
   const [stage, setStage]             = useState("select"); // select | intake | generating | editor
   const [docType, setDocType]         = useState(null);
   const [form, setF, setForm]         = useFormState({});
   const [notes, setNotes]             = useState("");
   const [docText, setDocText]         = useState("");
-  const [streaming, setStreaming]     = useState(false);
-  const [progress, setProgress]       = useState(0);
   const [wordCount, setWordCount]     = useState(0);
   const [clausePanel, setClausePanel] = useState(null);
   const [clauseAI, setClauseAI]       = useState("");
   const [clauseLoad, setClauseLoad]   = useState(false);
   const [exportModal, setExportModal] = useState(false);
+  const [checklist, setChecklist]     = useState(() => new Set());
+  const [demoStreaming, setDemoStreaming] = useState(false);
+  const [demoProgress, setDemoProgress] = useState(0);
   const editorWrap = useRef(null);
+
+  const isGenerating = streaming || demoStreaming;
+  const generatingText = streaming ? streamPreview : docText;
+  const generatingProgress = demoStreaming ? demoProgress : progress;
+
+  const toggleChecklist = (item) => {
+    setChecklist((prev) => {
+      const next = new Set(prev);
+      if (next.has(item)) next.delete(item);
+      else next.add(item);
+      return next;
+    });
+  };
 
   const dtInfo  = DOC_TYPES.find(d=>d.id===docType);
   // Memoised so the identity stays stable across renders; generate() depends on it.
@@ -38,7 +69,8 @@ export default function DraftingView() {
   /* ── GENERATE ── */
   const generate = useCallback(async () => {
     if (!docType) return;
-    setStage("generating"); setDocText(""); setProgress(0); setStreaming(true);
+    setStage("generating");
+    reset();
     const label  = dtInfo?.label || docType;
     const flist  = fields.map(f=>`${f.label}: ${form[f.key]||"[not provided]"}`).join("\n");
     const notesSection = notes.trim() ? `\n\nADDITIONAL INSTRUCTIONS FROM USER:\n${notes.trim()}` : "";
@@ -51,17 +83,16 @@ export default function DraftingView() {
     const sys = `Draft a complete, execution-ready ${label} under Indian law. Plain text only — no markdown, no asterisks, no hash headings. Numbered clauses, one short paragraph each. Always reach the signature block for both parties. Output only the document.`;
     const usr = `Draft a complete ${label} using these details:\n\n${flist}${notesSection}`;
     try {
-      let chars = 0;
-      const full = await streamChatCompletion({
+      const full = await stream({
         sys,
         messages: [{ role: "user", content: usr }],
-        onToken: (text, chunk) => {
-          chars += chunk.length;
-          setDocText(text);
-          setProgress(Math.min(99, Math.round((chars / 3200) * 100)));
-        },
+        charBudget: 3200,
       });
-      setProgress(100);
+      if (!full) {
+        setStage("intake");
+        return;
+      }
+      setDocText(full);
       setWordCount(countWords(full));
       try {
         await saveDraft({
@@ -70,48 +101,49 @@ export default function DraftingView() {
           typeIcon: dtInfo?.icon || "📝",
           typeShort: dtInfo?.short || "Doc",
           category: dtInfo?.category || "General",
+          matterId,
           form: { ...form },
           notes,
           content: full,
           createdAt: new Date().toISOString(),
         });
       } catch { /* storage unavailable */ }
-      setTimeout(()=>{ setStage("editor"); setStreaming(false); }, 400);
-    } catch(err) {
+      scheduleTimeout(() => setStage("editor"), 400);
+    } catch (err) {
       setDocText(`[Error: ${err.message}. Please try again.]`);
-      setStage("editor"); setStreaming(false);
+      setStage("editor");
     }
-  }, [docType, form, notes, dtInfo, fields]);
+  }, [docType, form, notes, dtInfo, fields, matterId, stream, reset, scheduleTimeout]);
 
   /* ── DEMO ── */
   // Replays a canned NDA through the real generating → editor flow so the app can be
   // shown end-to-end without a model running.
   const demo = useCallback(() => {
-    if (streaming) return;
+    if (isGenerating) return;
     const text = DEMO_DRAFT.content;
     setDocType(DEMO_DRAFT.docType);
     setForm({ ...DEMO_DRAFT.form });
     setNotes(DEMO_DRAFT.notes);
-    setDocText(""); setProgress(0); setWordCount(0);
-    setStage("generating"); setStreaming(true);
+    setDocText(""); setDemoProgress(0); setWordCount(0);
+    setStage("generating"); setDemoStreaming(true);
 
-    // Chunk size is derived from length so the replay always lands around 8 seconds.
     const chunk = Math.max(4, Math.ceil(text.length / 700));
     let i = 0;
     const tick = () => {
       if (i >= text.length) {
-        setProgress(100);
+        setDemoProgress(100);
         setWordCount(countWords(text));
-        setTimeout(()=>{ setStage("editor"); setStreaming(false); }, 400);
+        setDocText(text);
+        scheduleTimeout(() => { setStage("editor"); setDemoStreaming(false); }, 400);
         return;
       }
       i = Math.min(text.length, i + chunk);
       setDocText(text.slice(0, i));
-      setProgress(Math.min(99, Math.round((i/text.length)*100)));
-      setTimeout(tick, 12);
+      setDemoProgress(Math.min(99, Math.round((i/text.length)*100)));
+      scheduleTimeout(tick, 12);
     };
-    setTimeout(tick, 300);
-  }, [streaming, setForm]);
+    scheduleTimeout(tick, 300);
+  }, [isGenerating, setForm, scheduleTimeout]);
 
   /* ── CLAUSE ANALYSE ── */
   const analyseClause = useCallback(async (text) => {
@@ -141,14 +173,10 @@ export default function DraftingView() {
   /* ─ SELECT ─ */
   if (stage==="select") return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-      <div className="ast-view-header" style={{height:52,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 22px",background:C.bgPanel,flexShrink:0}}>
-        <div className="ast-view-header-title" style={{display:"flex",alignItems:"center",gap:8,fontSize:12}}>
-          <span style={{color:C.textSec}}>Drafting</span><span style={{color:C.textMut}}>›</span><span style={{color:C.textPri}}>Select Document Type</span>
-        </div>
-        <div className="ast-view-header-actions" style={{display:"flex",gap:7,alignItems:"center"}}>
-          <Btn onClick={demo} className="ast-hide-mobile">↻ Demo Mode</Btn>
-        </div>
-      </div>
+      <ViewHeader
+        crumbs={[{ label: "Drafting" }, { label: "Select Document Type" }]}
+        actions={<Btn onClick={demo} className="ast-hide-mobile">↻ Demo Mode</Btn>}
+      />
       <div className="ast-content-pad-lg" style={{flex:1,overflowY:"auto",padding:"30px 34px"}}>
         <div style={{marginBottom:26}}>
           <div style={{fontFamily:F.serif,fontSize:26,fontWeight:600,color:C.textPri,marginBottom:5}}>What would you like to draft?</div>
@@ -183,17 +211,19 @@ export default function DraftingView() {
   /* ─ INTAKE ─ */
   if (stage==="intake") return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-      <div className="ast-view-header" style={{height:52,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 22px",background:C.bgPanel,flexShrink:0}}>
-        <div className="ast-view-header-title" style={{display:"flex",alignItems:"center",gap:8,fontSize:12,minWidth:0}}>
-          <span onClick={()=>setStage("select")} style={{color:C.textSec,cursor:"pointer"}} onMouseEnter={e=>e.target.style.color=C.textPri} onMouseLeave={e=>e.target.style.color=C.textSec}>Drafting</span>
-          <span style={{color:C.textMut}}>›</span><span style={{color:C.textPri,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{dtInfo?.label}</span>
-        </div>
-        <div className="ast-intake-actions ast-view-header-actions" style={{display:"flex",alignItems:"center",gap:9}}>
-          <span style={{fontSize:11,color:pct===100?C.green:C.textMut,fontFamily:F.sans}}>{pct}% complete</span>
-          <Btn onClick={()=>setStage("select")}>← Back</Btn>
-          <Btn primary onClick={generate}>Generate Draft →</Btn>
-        </div>
-      </div>
+      <ViewHeader
+        crumbs={[
+          { label: "Drafting", onClick: () => setStage("select") },
+          { label: dtInfo?.label, maxWidth: 240 },
+        ]}
+        status={<span style={{ fontSize: 11, color: pct === 100 ? C.green : C.textMut, fontFamily: F.sans }}>{pct}% complete</span>}
+        actions={
+          <div className="ast-intake-actions" style={{ display: "flex", alignItems: "center", gap: 9 }}>
+            <Btn onClick={() => setStage("select")}>← Back</Btn>
+            <Btn primary onClick={generate}>Generate Draft →</Btn>
+          </div>
+        }
+      />
       <div className="ast-content-pad-lg" style={{flex:1,overflowY:"auto",padding:"26px 34px"}}>
         <div style={{maxWidth:660}}>
           {/* header card */}
@@ -212,12 +242,7 @@ export default function DraftingView() {
           {fields.map((f,i)=>(
             <div key={f.key} style={{marginBottom:16,animation:`fadeUp 0.28s ease ${i*0.04}s both`}}>
               <label style={{display:"block",fontSize:11,color:C.textSec,fontFamily:F.sans,marginBottom:6,letterSpacing:"0.02em"}}>{f.label}</label>
-              {f.type==="select"
-                ? <select value={form[f.key]||""} onChange={e=>setF(f.key,e.target.value)} style={{width:"100%",background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:7,padding:"9px 12px",color:form[f.key]?C.textPri:C.textMut,fontSize:12.5,fontFamily:F.sans,outline:"none",cursor:"pointer",appearance:"none"}}><option value="">Select…</option>{f.opts.map(o=><option key={o}>{o}</option>)}</select>
-                : f.type==="textarea"
-                ? <textarea value={form[f.key]||""} onChange={e=>setF(f.key,e.target.value)} placeholder={f.ph} style={{width:"100%",background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:7,padding:"9px 12px",color:C.textPri,fontSize:12.5,fontFamily:F.sans,outline:"none",resize:"vertical",minHeight:76,lineHeight:1.6,fontWeight:300}} onFocus={e=>e.target.style.borderColor=C.borderMid} onBlur={e=>e.target.style.borderColor=C.border}/>
-                : <input value={form[f.key]||""} onChange={e=>setF(f.key,e.target.value)} placeholder={f.ph} style={{width:"100%",background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:7,padding:"9px 12px",color:C.textPri,fontSize:12.5,fontFamily:F.sans,outline:"none"}} onFocus={e=>e.target.style.borderColor=C.borderMid} onBlur={e=>e.target.style.borderColor=C.border}/>
-              }
+              <Field field={f} value={form[f.key]} onChange={setF} />
             </div>
           ))}
 
@@ -267,12 +292,10 @@ export default function DraftingView() {
   /* ─ GENERATING ─ */
   if (stage==="generating") return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-      <div style={{height:52,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",padding:"0 22px",background:C.bgPanel,flexShrink:0,gap:8,fontSize:12}}>
-        <span style={{color:C.textSec}}>Drafting</span><span style={{color:C.textMut}}>›</span>
-        <span style={{color:C.textPri}}>{dtInfo?.label}</span>
-        <span style={{color:C.textMut,margin:"0 4px"}}>·</span>
-        <Spinner/><span style={{fontSize:11,color:C.textMut,marginLeft:6}}>Generating…</span>
-      </div>
+      <ViewHeader
+        crumbs={[{ label: "Drafting", muted: true }, { label: dtInfo?.label }]}
+        status={<><Spinner /><span style={{ fontSize: 11, color: C.textMut, marginLeft: 6 }}>Generating…</span></>}
+      />
       <div style={{flex:1,display:"flex",overflow:"hidden"}}>
         {/* live preview */}
         <div style={{flex:1,overflowY:"auto",padding:"26px 34px"}}>
@@ -280,15 +303,15 @@ export default function DraftingView() {
             <div style={{marginBottom:18}}>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
                 <span style={{fontSize:11,color:C.textSec,fontFamily:F.sans}}>Drafting {dtInfo?.label}…</span>
-                <span style={{fontSize:11,color:C.red,fontWeight:600}}>{progress}%</span>
+                <span style={{fontSize:11,color:C.red,fontWeight:600}}>{generatingProgress}%</span>
               </div>
               <div style={{height:2,background:C.bgHover,borderRadius:2}}>
-                <div style={{width:`${progress}%`,height:"100%",background:C.red,borderRadius:2,transition:"width 0.2s"}}/>
+                <div style={{width:`${generatingProgress}%`,height:"100%",background:C.red,borderRadius:2,transition:"width 0.2s"}}/>
               </div>
             </div>
             <div style={{fontFamily:F.sans,fontSize:12.5,color:C.textPri,lineHeight:1.88,fontWeight:300,whiteSpace:"pre-wrap"}}>
-              {docText}
-              {streaming&&<span style={{display:"inline-block",width:2,height:14,background:C.red,marginLeft:1,animation:"blink 1s step-end infinite",verticalAlign:"text-bottom"}}/>}
+              {generatingText}
+              {isGenerating&&<span style={{display:"inline-block",width:2,height:14,background:C.red,marginLeft:1,animation:"blink 1s step-end infinite",verticalAlign:"text-bottom"}}/>}
             </div>
           </div>
         </div>
@@ -296,13 +319,13 @@ export default function DraftingView() {
         <div className="ast-editor-side ast-panel-r-narrow" style={{width:220,borderLeft:`1px solid ${C.border}`,background:C.bgPanel,padding:"18px 15px"}}>
           <Label>Generation Status</Label>
           {[
-            {l:"Recitals & Definitions",done:progress>12},
-            {l:"Core Obligations",     done:progress>30},
-            {l:"Representations",      done:progress>48},
-            {l:"Term & Termination",   done:progress>62},
-            {l:"Dispute Resolution",   done:progress>76},
-            {l:"General Provisions",   done:progress>88},
-            {l:"Signature Block",      done:progress>=100},
+            {l:"Recitals & Definitions",done:generatingProgress>12},
+            {l:"Core Obligations",     done:generatingProgress>30},
+            {l:"Representations",      done:generatingProgress>48},
+            {l:"Term & Termination",   done:generatingProgress>62},
+            {l:"Dispute Resolution",   done:generatingProgress>76},
+            {l:"General Provisions",   done:generatingProgress>88},
+            {l:"Signature Block",      done:generatingProgress>=100},
           ].map((item,i)=>(
             <div key={i} style={{display:"flex",alignItems:"center",gap:8,marginBottom:9}}>
               <div style={{width:15,height:15,borderRadius:"50%",border:`1.5px solid ${item.done?C.green:C.border}`,background:item.done?`${C.green}20`:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
@@ -323,25 +346,27 @@ export default function DraftingView() {
   /* ─ EDITOR ─ */
   return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-      {/* toolbar */}
-      <div style={{height:52,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 18px",background:C.bgPanel,flexShrink:0}}>
-        <div style={{display:"flex",alignItems:"center",gap:8,fontSize:12}}>
-          <span onClick={()=>setStage("select")} style={{color:C.textSec,cursor:"pointer"}} onMouseEnter={e=>e.target.style.color=C.textPri} onMouseLeave={e=>e.target.style.color=C.textSec}>Drafting</span>
-          <span style={{color:C.textMut}}>›</span><span style={{color:C.textPri}}>{dtInfo?.label}</span>
-          <span style={{color:C.textMut,margin:"0 4px"}}>·</span>
-          <div style={{display:"flex",alignItems:"center",gap:5}}>
-            <div style={{width:6,height:6,borderRadius:"50%",background:C.green,animation:"pulse 2s infinite"}}/>
-            <span style={{fontSize:9,color:C.green,letterSpacing:"0.08em"}}>DRAFT READY</span>
+      <ViewHeader
+        crumbs={[
+          { label: "Drafting", onClick: () => setStage("select") },
+          { label: dtInfo?.label },
+        ]}
+        status={
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.green, animation: "pulse 2s infinite" }} />
+            <span style={{ fontSize: 9, color: C.green, letterSpacing: "0.08em" }}>DRAFT READY</span>
           </div>
-        </div>
-        <div style={{display:"flex",alignItems:"center",gap:6}}>
-          <span style={{fontSize:11,color:C.textMut,fontFamily:F.sans,marginRight:4}}>{wordCount.toLocaleString()} words</span>
-          <Btn onClick={()=>{setStage("intake");setDocText("");setNotes("");}}>← Regenerate</Btn>
-          <Btn onClick={()=>setExportModal(true)}>↓ Export Word</Btn>
-          <Btn onClick={()=>navigator.clipboard?.writeText(docText)}>Copy</Btn>
-          <Btn primary>Save to Matter</Btn>
-        </div>
-      </div>
+        }
+        actions={
+          <>
+            <span style={{ fontSize: 11, color: C.textMut, fontFamily: F.sans, marginRight: 4 }}>{wordCount.toLocaleString()} words</span>
+            <Btn onClick={() => { setStage("intake"); setDocText(""); setNotes(""); }}>← Regenerate</Btn>
+            <Btn onClick={() => setExportModal(true)}>↓ Export Word</Btn>
+            <Btn onClick={() => navigator.clipboard?.writeText(docText)}>Copy</Btn>
+            <Btn primary>Save to Matter</Btn>
+          </>
+        }
+      />
       {exportModal&&<ExportModal defaultName={`${dtInfo?.short||"draft"}_astreya`} content={docText} title={dtInfo?.label||"Legal Document"} onClose={()=>setExportModal(false)}/>}
 
       <div style={{flex:1,display:"flex",overflow:"hidden"}}>
@@ -417,18 +442,18 @@ export default function DraftingView() {
             </div>
 
             <Label>Review Checklist</Label>
-            {["Parties correctly identified","Governing law clause present","Dispute resolution mechanism","Execution / signature block","Stamp duty obligation checked","Annexures complete"].map((item,i)=>(
-              <div key={i} style={{display:"flex",alignItems:"center",gap:7,marginBottom:8,cursor:"pointer"}} onClick={e=>{const b=e.currentTarget.querySelector(".cb");b.style.background=b.style.background?"":`${C.green}30`;b.style.borderColor=b.style.borderColor===C.green?"":C.green;}}>
-                <div className="cb" style={{width:13,height:13,borderRadius:3,border:`1px solid ${C.border}`,flexShrink:0,background:"transparent",transition:"all 0.15s"}}/>
-                <span style={{fontSize:10.5,color:C.textSec,fontFamily:F.sans,lineHeight:1.4}}>{item}</span>
-              </div>
-            ))}
+            {CHECKLIST_ITEMS.map((item,i)=>{
+              const checked = checklist.has(item);
+              return (
+                <div key={i} style={{display:"flex",alignItems:"center",gap:7,marginBottom:8,cursor:"pointer"}} onClick={()=>toggleChecklist(item)}>
+                  <div style={{width:13,height:13,borderRadius:3,border:`1px solid ${checked?C.green:C.border}`,flexShrink:0,background:checked?`${C.green}30`:"transparent",transition:"all 0.15s"}}/>
+                  <span style={{fontSize:10.5,color:checked?C.textPri:C.textSec,fontFamily:F.sans,lineHeight:1.4}}>{item}</span>
+                </div>
+              );
+            })}
           </div>
           <div style={{padding:"10px 13px",borderTop:`1px solid ${C.border}`}}>
-            <div style={{padding:"9px 10px",background:`${C.amber}0E`,border:`1px solid ${C.amber}33`,borderRadius:6}}>
-              <div style={{fontSize:9,color:C.amber,fontWeight:600,letterSpacing:"0.08em",marginBottom:3}}>REMINDER</div>
-              <p style={{fontSize:10,color:C.textMut,lineHeight:1.5}}>Have a licensed advocate review before execution. Stamp duty varies by state.</p>
-            </div>
+            <ReminderCard>Have a licensed advocate review before execution. Stamp duty varies by state.</ReminderCard>
           </div>
         </div>
       </div>

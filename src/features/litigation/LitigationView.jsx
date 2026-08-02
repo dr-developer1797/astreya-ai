@@ -2,16 +2,21 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { C, F } from "@/shared/constants/theme";
+import Btn from "@/shared/ui/Btn";
+import Field from "@/shared/ui/Field";
+import Markdown from "@/shared/ui/Markdown";
+import ReminderCard from "@/shared/ui/ReminderCard";
+import ViewHeader from "@/shared/ui/ViewHeader";
 import ExportModal from "@/shared/modals/ExportModal";
-import { streamChatCompletion } from "@/shared/llm/stream";
+import { useLLMStream } from "@/shared/hooks/useLLMStream";
 import { useFormState } from "@/shared/hooks/useFormState";
+import { useTimeoutCleanup } from "@/shared/hooks/useTimeoutCleanup";
 
 export default function LitigationView() {
+  const { streaming, text: report, progress, stream, reset } = useLLMStream();
+  const { scheduleTimeout } = useTimeoutCleanup();
   const [stage, setStage]       = useState("form");
   const [form, setF]            = useFormState({});
-  const [report, setReport]     = useState("");
-  const [streaming, setStr]     = useState(false);
-  const [progress, setProg]     = useState(0);
   const [exportModal, setExportModal] = useState(false);
   const scrollRef               = useRef(null);
 
@@ -25,7 +30,8 @@ export default function LitigationView() {
 
   const generate = useCallback(async () => {
     if (!form.facts?.trim() || form.facts.trim().length < 40) return;
-    setStage("generating"); setReport(""); setProg(0); setStr(true);
+    reset();
+    setStage("generating");
     const sys = `You are a senior Indian litigator with 25 years of courtroom experience. Produce a detailed Litigation Strategy Report using this EXACT structure (use Markdown headings and bullets):
 
 ## Matter Overview
@@ -52,38 +58,24 @@ SPECIFIC CONCERNS: ${form.concerns||"None"}
 NOTES: ${form.notes||"None"}`;
 
     try {
-      let chars = 0;
-      await streamChatCompletion({
+      const full = await stream({
         sys,
         messages: [{ role: "user", content: usr }],
-        onToken: (text, chunk) => {
-          chars += chunk.length;
-          setReport(text);
-          setProg(Math.min(99, Math.round((chars / 2800) * 100)));
-        },
+        charBudget: 2800,
       });
-      setProg(100); setTimeout(()=>{setStage("results");setStr(false);},350);
-    } catch(err){setReport(`Error: ${err.message}`);setStage("results");setStr(false);}
-  },[form]);
-
-  const renderMd = (text) => {
-    if(!text) return null;
-    return text.split("\n").map((line,i)=>{
-      if(line.startsWith("## ")) return <div key={i} style={{fontSize:11,fontWeight:600,letterSpacing:"0.1em",textTransform:"uppercase",color:C.textSec,marginBottom:8,marginTop:i>0?20:0,borderBottom:`1px solid ${C.border}`,paddingBottom:7,fontFamily:F.sans}}>{line.slice(3)}</div>;
-      if(line.startsWith("### ")) return <div key={i} style={{fontSize:12,fontWeight:600,color:C.gold,marginBottom:6,marginTop:12,fontFamily:F.sans}}>{line.slice(4)}</div>;
-      if(line.startsWith("- ")||line.startsWith("• ")) return <div key={i} style={{display:"flex",gap:8,marginBottom:5}}><span style={{color:C.red,fontSize:11,marginTop:3,flexShrink:0}}>▸</span><span style={{fontSize:12.5,color:C.textPri,lineHeight:1.7,fontFamily:F.sans,fontWeight:300}}>{line.replace(/^[-•]\s*/,"")}</span></div>;
-      if(/^\d+\./.test(line)) return <div key={i} style={{display:"flex",gap:8,marginBottom:5}}><span style={{color:C.red,fontSize:10,fontFamily:"monospace",minWidth:20,marginTop:3,flexShrink:0}}>{line.match(/^\d+/)[0]}.</span><span style={{fontSize:12.5,color:C.textPri,lineHeight:1.7,fontFamily:F.sans,fontWeight:300}}>{line.replace(/^\d+\.\s*/,"")}</span></div>;
-      if(line.startsWith("⚠")) return <div key={i} style={{marginTop:16,padding:"9px 13px",background:`${C.amber}0E`,border:`1px solid ${C.amber}33`,borderRadius:6,fontSize:11,color:C.amber,fontFamily:F.sans,lineHeight:1.5}}>{line}</div>;
-      if(line.trim()==="") return <div key={i} style={{height:4}}/>;
-      return <p key={i} style={{fontSize:12.5,color:C.textPri,lineHeight:1.75,marginBottom:6,fontFamily:F.sans,fontWeight:300}}>{line}</p>;
-    });
-  };
+      if (!full) {
+        setStage("form");
+        return;
+      }
+      scheduleTimeout(() => setStage("results"), 350);
+    } catch {
+      setStage("results");
+    }
+  }, [form, stream, reset, scheduleTimeout]);
 
   if(stage==="form") return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-      <div style={{height:52,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 22px",background:C.bgPanel,flexShrink:0}}>
-        <div style={{display:"flex",alignItems:"center",gap:8,fontSize:12}}><span style={{color:C.textSec}}>Litigation</span><span style={{color:C.textMut}}>›</span><span style={{color:C.textPri}}>Strategy Report</span></div>
-      </div>
+      <ViewHeader crumbs={[{ label: "Litigation" }, { label: "Strategy Report" }]} />
       <div style={{flex:1,overflowY:"auto",padding:"28px 34px"}}>
         <div style={{maxWidth:680}}>
           <div style={{marginBottom:24}}>
@@ -99,10 +91,7 @@ NOTES: ${form.notes||"None"}`;
             ].map(f=>(
               <div key={f.k}>
                 <label style={{display:"block",fontSize:11,color:C.textSec,fontFamily:F.sans,marginBottom:6}}>{f.label}</label>
-                {f.type==="select"
-                  ? <select value={form[f.k]||""} onChange={e=>setF(f.k,e.target.value)} style={{width:"100%",background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:7,padding:"9px 12px",color:form[f.k]?C.textPri:C.textMut,fontSize:12.5,fontFamily:F.sans,outline:"none",cursor:"pointer",appearance:"none"}}><option value="">Select…</option>{f.opts.map(o=><option key={o}>{o}</option>)}</select>
-                  : <input value={form[f.k]||""} onChange={e=>setF(f.k,e.target.value)} placeholder={f.ph} style={{width:"100%",background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:7,padding:"9px 12px",color:C.textPri,fontSize:12.5,fontFamily:F.sans,outline:"none"}} onFocus={e=>e.target.style.borderColor=C.borderMid} onBlur={e=>e.target.style.borderColor=C.border}/>
-                }
+                <Field field={{ key: f.k, type: f.type, opts: f.opts, ph: f.ph }} value={form[f.k]} onChange={setF} />
               </div>
             ))}
           </div>
@@ -113,18 +102,15 @@ NOTES: ${form.notes||"None"}`;
           ].map(f=>(
             <div key={f.k} style={{marginBottom:14}}>
               <label style={{display:"block",fontSize:11,color:C.textSec,fontFamily:F.sans,marginBottom:6}}>{f.label}</label>
-              <textarea value={form[f.k]||""} onChange={e=>setF(f.k,e.target.value)} placeholder={f.ph} style={{width:"100%",background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:7,padding:"9px 12px",color:C.textPri,fontSize:12.5,fontFamily:F.sans,outline:"none",resize:"vertical",minHeight:f.rows,lineHeight:1.65,fontWeight:300}} onFocus={e=>e.target.style.borderColor=C.borderMid} onBlur={e=>e.target.style.borderColor=C.border}/>
+              <Field field={{ key: f.k, type: f.type, ph: f.ph, rows: f.rows }} value={form[f.k]} onChange={setF} />
             </div>
           ))}
           <div style={{padding:"9px 13px",background:C.bgCard,border:`1px solid ${C.border}`,borderLeft:`2px solid ${C.amber}`,borderRadius:"0 6px 6px 0",marginBottom:18}}>
             <p style={{fontSize:10.5,color:C.textMut,lineHeight:1.6,fontFamily:F.sans}}><span style={{color:C.amber,fontWeight:600}}>Note.</span> Strategy reports are AI-generated preliminary analysis. Verify all citations and consult a qualified advocate before filing.</p>
           </div>
-          <button onClick={generate} disabled={!form.facts?.trim()||form.facts.trim().length<40}
-            style={{padding:"11px 26px",background:form.facts?.trim()?.length>=40?C.red:"#2A1A1E",border:"none",borderRadius:7,color:form.facts?.trim()?.length>=40?"#fff":C.textMut,fontSize:13,fontWeight:500,cursor:form.facts?.trim()?.length>=40?"pointer":"not-allowed",fontFamily:F.sans,letterSpacing:"0.04em"}}
-            onMouseEnter={e=>{if(form.facts?.trim()?.length>=40)e.currentTarget.style.background="#B51D30";}}
-            onMouseLeave={e=>{if(form.facts?.trim()?.length>=40)e.currentTarget.style.background=C.red;}}>
+          <Btn primary onClick={generate} disabled={!form.facts?.trim()||form.facts.trim().length<40}>
             ⚖ Generate Strategy Report
-          </button>
+          </Btn>
         </div>
       </div>
     </div>
@@ -132,17 +118,20 @@ NOTES: ${form.notes||"None"}`;
 
   if(stage==="generating") return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-      <div style={{height:52,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:8,padding:"0 22px",background:C.bgPanel,flexShrink:0,fontSize:12}}>
-        <span style={{color:C.textSec}}>Litigation</span><span style={{color:C.textMut}}>›</span><span style={{color:C.textPri}}>Generating Strategy…</span>
-        <span style={{color:C.textMut,margin:"0 4px"}}>·</span>
-        <div style={{width:13,height:13,border:`2px solid ${C.border}`,borderTop:`2px solid ${C.red}`,borderRadius:"50%",animation:"spin 0.7s linear infinite"}}/>
-        <span style={{fontSize:11,color:C.textMut}}>{progress}%</span>
-      </div>
+      <ViewHeader
+        crumbs={[{ label: "Litigation", muted: true }, { label: "Generating Strategy…" }]}
+        status={
+          <>
+            <div style={{ width: 13, height: 13, border: `2px solid ${C.border}`, borderTop: `2px solid ${C.red}`, borderRadius: "50%", animation: "spin 0.7s linear infinite" }} />
+            <span style={{ fontSize: 11, color: C.textMut }}>{progress}%</span>
+          </>
+        }
+      />
       <div ref={scrollRef} style={{flex:1,overflowY:"auto",padding:"28px 36px"}}>
         <div style={{maxWidth:680}}>
           <div style={{height:2,background:C.bgHover,borderRadius:2,marginBottom:20}}><div style={{width:`${progress}%`,height:"100%",background:C.red,borderRadius:2,transition:"width 0.2s"}}/></div>
           <div style={{fontFamily:F.sans,fontSize:12.5,color:C.textPri,lineHeight:1.85,fontWeight:300}}>
-            {renderMd(report)}
+            {report && <Markdown text={report} variant="report" />}
             {streaming&&<span style={{display:"inline-block",width:2,height:14,background:C.red,marginLeft:1,animation:"blink 1s step-end infinite",verticalAlign:"text-bottom"}}/>}
           </div>
         </div>
@@ -152,23 +141,29 @@ NOTES: ${form.notes||"None"}`;
 
   return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-      <div style={{height:52,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 20px",background:C.bgPanel,flexShrink:0}}>
-        <div style={{display:"flex",alignItems:"center",gap:8,fontSize:12}}>
-          <span onClick={()=>setStage("form")} style={{color:C.textSec,cursor:"pointer"}} onMouseEnter={e=>e.target.style.color=C.textPri} onMouseLeave={e=>e.target.style.color=C.textSec}>Litigation</span>
-          <span style={{color:C.textMut}}>›</span><span style={{color:C.textPri}}>Strategy Report</span>
-          <span style={{color:C.textMut,margin:"0 4px"}}>·</span>
-          <div style={{display:"flex",alignItems:"center",gap:5}}><div style={{width:6,height:6,borderRadius:"50%",background:C.green,animation:"pulse 2s infinite"}}/><span style={{fontSize:9,color:C.green,letterSpacing:"0.08em"}}>COMPLETE</span></div>
-        </div>
-        <div style={{display:"flex",gap:6}}>
-          <button onClick={()=>{setStage("form");setReport("");}} style={{padding:"5px 12px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:5,color:C.textSec,fontSize:11,cursor:"pointer",fontFamily:F.sans}}>← New Matter</button>
-          <button onClick={()=>navigator.clipboard?.writeText(report)} style={{padding:"5px 12px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:5,color:C.textSec,fontSize:11,cursor:"pointer",fontFamily:F.sans}}>Copy</button>
-          <button onClick={()=>setExportModal(true)} style={{padding:"5px 12px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:5,color:C.textSec,fontSize:11,cursor:"pointer",fontFamily:F.sans}}>↓ Export Word</button>
-        </div>
-      </div>
+      <ViewHeader
+        crumbs={[
+          { label: "Litigation", onClick: () => setStage("form") },
+          { label: "Strategy Report" },
+        ]}
+        status={
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.green, animation: "pulse 2s infinite" }} />
+            <span style={{ fontSize: 9, color: C.green, letterSpacing: "0.08em" }}>COMPLETE</span>
+          </div>
+        }
+        actions={
+          <>
+            <Btn compact onClick={() => { setStage("form"); reset(); }}>← New Matter</Btn>
+            <Btn compact onClick={() => navigator.clipboard?.writeText(report)}>Copy</Btn>
+            <Btn compact onClick={() => setExportModal(true)}>↓ Export Word</Btn>
+          </>
+        }
+      />
       <div style={{flex:1,display:"flex",overflow:"hidden"}}>
         <div ref={scrollRef} style={{flex:1,overflowY:"auto",padding:"28px 36px"}}>
           <div style={{maxWidth:700,background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:10,padding:"32px 36px"}}>
-            {renderMd(report)}
+            {report && <Markdown text={report} variant="report" />}
           </div>
         </div>
         <div className="ast-editor-side ast-panel-r-narrow" style={{width:210,borderLeft:`1px solid ${C.border}`,background:C.bgPanel,padding:"16px 14px",overflowY:"auto"}}>
@@ -179,10 +174,7 @@ NOTES: ${form.notes||"None"}`;
               <div style={{fontSize:11,color:C.textPri,fontFamily:F.sans,lineHeight:1.4}}>{v}</div>
             </div>
           ))}
-          <div style={{marginTop:10,padding:"9px 10px",background:C.redFaint,border:`1px solid ${C.redGlow}`,borderRadius:6}}>
-            <div style={{fontSize:9,color:C.amber,fontWeight:600,letterSpacing:"0.08em",marginBottom:3}}>REMINDER</div>
-            <p style={{fontSize:10,color:C.textMut,lineHeight:1.5}}>Verify all citations with SCC Online / Manupatra before filing.</p>
-          </div>
+          <ReminderCard>Verify all citations with SCC Online / Manupatra before filing.</ReminderCard>
         </div>
       </div>
       {exportModal&&<ExportModal defaultName="litigation_strategy_astreya" content={report} title={`Litigation Strategy — ${form.domain||'Matter'}`} onClose={()=>setExportModal(false)}/>}

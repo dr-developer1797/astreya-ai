@@ -2,40 +2,46 @@
 
 import { useState, useCallback } from "react";
 import Image from "next/image";
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import { C, F } from "@/shared/constants/theme";
 import { FONT_IMPORT } from "@/shared/styles/fontImport";
 import { NAV } from "@/shared/constants/nav";
+import { NAV_ROUTES, navIdFromPath } from "@/shared/constants/routes";
 import { MATTERS } from "@/shared/constants/matters";
+import { MatterProvider, useMatter } from "@/shared/context/MatterContext";
 import { useViewport, ViewportContext } from "@/shared/hooks/useViewport";
 import DemoDisclaimerMarquee from "@/shared/ui/DemoDisclaimerMarquee";
-import ResearchView from "@/features/research/ResearchView";
-import DraftingView from "@/features/drafting/DraftingView";
-import RiskReviewView from "@/features/due-diligence/RiskReviewView";
-import LitigationView from "@/features/litigation/LitigationView";
-import ComplianceView from "@/features/compliance/ComplianceView";
-import HistoryView from "@/features/history/HistoryView";
-import MattersView from "@/features/matters/MattersView";
 
-export default function AstreyaApp() {
+function AstreyaShellInner({ children }) {
   const viewport = useViewport();
   const { isMobile, isTablet } = viewport;
-  const [nav, setNav]           = useState("research");
-  const [matter, setMatter]     = useState("m1");
-  const [mOpen, setMOpen]       = useState(false);
+  const pathname = usePathname();
+  const router = useRouter();
+  const nav = navIdFromPath(pathname);
+  const { matterId, setMatterId, matter: m } = useMatter();
+  const [mOpen, setMOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const m = MATTERS.find(x=>x.id===matter);
+  const [moreOpen, setMoreOpen] = useState(false);
 
   const goNav = useCallback((id) => {
-    setNav(id);
+    router.push(NAV_ROUTES[id] ?? "/research");
     setMenuOpen(false);
-  }, []);
+    setMoreOpen(false);
+  }, [router]);
 
   const MOBILE_TABS = [
     { id: "research", label: "Research" },
     { id: "draft", label: "Draft" },
     { id: "review", label: "Review" },
     { id: "history", label: "History" },
+    { id: "more", label: "More" },
+  ];
+
+  const MORE_ITEMS = [
+    { id: "litigate", label: "Litigation" },
+    { id: "comply", label: "Compliance" },
     { id: "matters", label: "Matters" },
   ];
 
@@ -50,12 +56,14 @@ export default function AstreyaApp() {
       comply:  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>,
       history: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>,
       matters: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>,
+      more:    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>,
     };
     return icons[id] || null;
   };
 
   const sideW   = (isMobile || collapsed) ? (isMobile ? 0 : 52) : (isTablet ? 188 : 232);
   const sideTransition = "width 0.22s cubic-bezier(0.4,0,0.2,1)";
+  const mobileMoreActive = MORE_ITEMS.some((item) => item.id === nav);
 
   return (
     <ViewportContext.Provider value={viewport}>
@@ -64,37 +72,28 @@ export default function AstreyaApp() {
       <DemoDisclaimerMarquee />
 
       <div
-        className={`ast-backdrop${menuOpen ? " ast-visible" : ""}`}
-        onClick={() => setMenuOpen(false)}
-        aria-hidden={!menuOpen}
+        className={`ast-backdrop${menuOpen || moreOpen ? " ast-visible" : ""}`}
+        onClick={() => { setMenuOpen(false); setMoreOpen(false); }}
+        aria-hidden={!(menuOpen || moreOpen)}
       />
 
       <div className="ast-shell" style={{flex:1,display:"flex",overflow:"hidden",minHeight:0}}>
 
-      {/* ── SIDEBAR ── */}
       <div
         className={`ast-sidebar${menuOpen ? " ast-open" : ""}${!collapsed && !isMobile ? " ast-sidebar-expanded" : ""}`}
         style={{width:sideW,minWidth:isMobile?0:sideW,background:C.bgPanel,borderRight:`1px solid ${C.border}`,display:"flex",flexDirection:"column",flexShrink:0,overflow:"hidden",transition:sideTransition}}
       >
-
-        {/* logo row */}
         <div style={{padding:collapsed?"11px 0":"19px 19px 16px",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:collapsed?"center":"space-between",gap:10,flexShrink:0}}>
-          <div title={collapsed?"Expand":undefined} style={{display:"flex",alignItems:"center",gap:10,overflow:"hidden",cursor:collapsed?"pointer":"default",minWidth:0}} onClick={()=>{ if(collapsed) setCollapsed(false); }}>
+          <Link href="/research" style={{display:"flex",alignItems:"center",gap:10,overflow:"hidden",cursor:collapsed?"pointer":"default",minWidth:0,textDecoration:"none"}} onClick={()=>{ if(collapsed && !isMobile) setCollapsed(false); }}>
             <Image src="/astreya-logo-dark.png" alt="Astreya" width={631} height={521} priority
               style={{width:29,height:24,objectFit:"contain",flexShrink:0}}/>
-            {!collapsed && !isMobile && (
+            {(!collapsed || isMobile) && (
               <div style={{animation:"fadeUp 0.18s ease",minWidth:0}}>
                 <div style={{fontFamily:F.serif,fontSize:20,fontWeight:700,color:C.textPri,letterSpacing:"0.18em",textTransform:"uppercase",whiteSpace:"nowrap"}}>Astreya</div>
                 <div style={{fontSize:8,color:C.textMut,letterSpacing:"0.22em",textTransform:"uppercase",marginTop:-2,fontFamily:F.sans,whiteSpace:"nowrap"}}>Indian Legal AI</div>
               </div>
             )}
-            {isMobile && (
-              <div style={{animation:"fadeUp 0.18s ease",minWidth:0}}>
-                <div style={{fontFamily:F.serif,fontSize:20,fontWeight:700,color:C.textPri,letterSpacing:"0.18em",textTransform:"uppercase",whiteSpace:"nowrap"}}>Astreya</div>
-                <div style={{fontSize:8,color:C.textMut,letterSpacing:"0.22em",textTransform:"uppercase",marginTop:-2,fontFamily:F.sans,whiteSpace:"nowrap"}}>Indian Legal AI</div>
-              </div>
-            )}
-          </div>
+          </Link>
           {!collapsed && !isMobile && (
             <button onClick={()=>setCollapsed(true)} title="Collapse"
               style={{background:"transparent",border:`1px solid ${C.border}`,borderRadius:5,padding:"4px 5px",cursor:"pointer",color:C.textMut,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all 0.15s"}}
@@ -111,15 +110,14 @@ export default function AstreyaApp() {
           )}
         </div>
 
-        {/* matter picker */}
         {(!collapsed || isMobile) && (
           <div style={{padding:"10px 12px",borderBottom:`1px solid ${C.border}`,animation:"fadeUp 0.18s ease",flexShrink:0}}>
             <div style={{fontSize:9,color:C.textMut,letterSpacing:"0.13em",textTransform:"uppercase",marginBottom:6}}>Active Matter</div>
             <div onClick={()=>setMOpen(o=>!o)} style={{background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:6,padding:"8px 10px",cursor:"pointer"}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                 <div style={{overflow:"hidden"}}>
-                  <div style={{fontSize:10,color:C.red,fontWeight:600,letterSpacing:"0.05em",whiteSpace:"nowrap"}}>{m.code}</div>
-                  <div style={{fontSize:11,color:C.textPri,marginTop:1,lineHeight:1.3,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:140}}>{m.label}</div>
+                  <div style={{fontSize:10,color:C.red,fontWeight:600,letterSpacing:"0.05em",whiteSpace:"nowrap"}}>{m?.code}</div>
+                  <div style={{fontSize:11,color:C.textPri,marginTop:1,lineHeight:1.3,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:140}}>{m?.label}</div>
                 </div>
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={C.textMut} strokeWidth="2" strokeLinecap="round" style={{transform:mOpen?"rotate(180deg)":"none",transition:"transform 0.2s",flexShrink:0}}><polyline points="6 9 12 15 18 9"/></svg>
               </div>
@@ -127,11 +125,11 @@ export default function AstreyaApp() {
             {mOpen&&(
               <div style={{marginTop:3,background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:6,overflow:"hidden",animation:"fadeUp 0.15s ease"}}>
                 {MATTERS.map(x=>(
-                  <div key={x.id} onClick={()=>{setMatter(x.id);setMOpen(false);}}
-                    style={{padding:"8px 11px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,background:x.id===matter?C.redFaint:"transparent",transition:"background 0.1s"}}
-                    onMouseEnter={e=>{if(x.id!==matter)e.currentTarget.style.background=C.bgHover;}}
-                    onMouseLeave={e=>{if(x.id!==matter)e.currentTarget.style.background="transparent";}}>
-                    <div style={{fontSize:9,color:x.id===matter?C.red:C.textMut,fontWeight:600,letterSpacing:"0.08em"}}>{x.code}</div>
+                  <div key={x.id} onClick={()=>{setMatterId(x.id);setMOpen(false);}}
+                    style={{padding:"8px 11px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,background:x.id===matterId?C.redFaint:"transparent",transition:"background 0.1s"}}
+                    onMouseEnter={e=>{if(x.id!==matterId)e.currentTarget.style.background=C.bgHover;}}
+                    onMouseLeave={e=>{if(x.id!==matterId)e.currentTarget.style.background="transparent";}}>
+                    <div style={{fontSize:9,color:x.id===matterId?C.red:C.textMut,fontWeight:600,letterSpacing:"0.08em"}}>{x.code}</div>
                     <div style={{fontSize:11,color:C.textPri,marginTop:1}}>{x.label}</div>
                     <div style={{fontSize:9,color:C.textMut,marginTop:1}}>{x.type}</div>
                   </div>
@@ -141,26 +139,24 @@ export default function AstreyaApp() {
           </div>
         )}
 
-        {/* nav */}
         <nav style={{flex:1,padding:collapsed?"6px 6px":"7px 8px",overflowY:"auto"}}>
           {NAV.map(item=>{
             const active=nav===item.id;
+            const href = NAV_ROUTES[item.id];
             return (
-              <div key={item.id}
-                onClick={()=>{ goNav(item.id); if(collapsed && !isMobile) setCollapsed(false); }}
+              <Link key={item.id} href={href}
+                onClick={()=>{ if(collapsed && !isMobile) setCollapsed(false); setMenuOpen(false); }}
                 title={collapsed && !isMobile ? item.label : undefined}
-                style={{display:"flex",alignItems:"center",gap:(collapsed && !isMobile)?0:9,padding:(collapsed && !isMobile)?"10px 0":"9px 10px",justifyContent:(collapsed && !isMobile)?"center":"flex-start",borderRadius:7,marginBottom:2,cursor:"pointer",background:active?C.redFaint:"transparent",border:`1px solid ${active?C.redGlow:"transparent"}`,color:active?C.red:C.textSec,transition:"all 0.15s"}}
-                onMouseEnter={e=>{if(!active)e.currentTarget.style.background=C.bgHover;}}
-                onMouseLeave={e=>{if(!active)e.currentTarget.style.background="transparent";}}>
+                style={{display:"flex",alignItems:"center",gap:(collapsed && !isMobile)?0:9,padding:(collapsed && !isMobile)?"10px 0":"9px 10px",justifyContent:(collapsed && !isMobile)?"center":"flex-start",borderRadius:7,marginBottom:2,cursor:"pointer",background:active?C.redFaint:"transparent",border:`1px solid ${active?C.redGlow:"transparent"}`,color:active?C.red:C.textSec,transition:"all 0.15s",textDecoration:"none"}}
+              >
                 <div style={{flexShrink:0}}><NavIcon id={item.id}/></div>
                 {!collapsed || isMobile ? <span style={{fontSize:12,fontWeight:active?500:400,whiteSpace:"nowrap",animation:"fadeUp 0.15s ease"}}>{item.label}</span> : null}
                 {(!collapsed || isMobile) && active && <div style={{marginLeft:"auto",width:4,height:4,borderRadius:"50%",background:C.red,flexShrink:0}}/>}
-              </div>
+              </Link>
             );
           })}
         </nav>
 
-        {/* user */}
         <div style={{padding:(collapsed && !isMobile)?"10px 0":"12px 13px",borderTop:`1px solid ${C.border}`,flexShrink:0}}>
           <div style={{display:"flex",alignItems:"center",gap:(collapsed && !isMobile)?0:8,justifyContent:(collapsed && !isMobile)?"center":"flex-start"}}>
             <div style={{width:26,height:26,borderRadius:"50%",background:"#1E2030",border:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:C.textSec,fontWeight:600,flexShrink:0}}>HG</div>
@@ -172,21 +168,15 @@ export default function AstreyaApp() {
             )}
           </div>
           {(!collapsed || isMobile) && (
-            <div
-              title="Gemma 4 served securely through Google AI Studio"
-              style={{ display:"flex", alignItems:"center", gap:5, marginTop:7,
-                padding:"4px 7px", background:C.bgHover, borderRadius:4, border:`1px solid ${C.border}` }}
-            >
+            <div title="Gemma 4 served securely through Google AI Studio"
+              style={{ display:"flex", alignItems:"center", gap:5, marginTop:7, padding:"4px 7px", background:C.bgHover, borderRadius:4, border:`1px solid ${C.border}` }}>
               <div style={{ width:5, height:5, borderRadius:"50%", background:C.green }} />
-              <span style={{ fontSize:9, color:C.textMut, fontFamily:F.sans, letterSpacing:"0.08em" }}>
-                AI STUDIO · GEMMA 4
-              </span>
+              <span style={{ fontSize:9, color:C.textMut, fontFamily:F.sans, letterSpacing:"0.08em" }}>AI STUDIO · GEMMA 4</span>
             </div>
           )}
         </div>
       </div>
 
-      {/* ── MAIN ── */}
       <div className="ast-main-stack" style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",position:"relative",minWidth:0}}>
         <div className="ast-mobile-top">
           <button type="button" className="ast-mobile-menu-btn" onClick={()=>setMenuOpen(true)} aria-label="Open menu">
@@ -199,31 +189,48 @@ export default function AstreyaApp() {
         </div>
 
         <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",minHeight:0}}>
-          {nav==="research" && <ResearchView/>}
-          {nav==="draft"    && <DraftingView/>}
-          {nav==="review"   && <RiskReviewView/>}
-          {nav==="litigate" && <LitigationView/>}
-          {nav==="comply"   && <ComplianceView/>}
-          {nav==="history"  && <HistoryView/>}
-          {nav==="matters"  && <MattersView/>}
+          {children}
         </div>
 
+        {moreOpen && (
+          <div style={{position:"absolute",bottom:56,left:0,right:0,background:C.bgPanel,borderTop:`1px solid ${C.border}`,padding:"8px 12px 12px",zIndex:40,animation:"fadeUp 0.15s ease"}}>
+            {MORE_ITEMS.map(item => (
+              <button key={item.id} type="button" onClick={() => goNav(item.id)}
+                style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"10px 12px",background:nav===item.id?C.redFaint:"transparent",border:`1px solid ${nav===item.id?C.redGlow:C.border}`,borderRadius:7,marginBottom:6,cursor:"pointer",color:nav===item.id?C.red:C.textSec,fontFamily:F.sans,fontSize:12}}>
+                <NavIcon id={item.id}/>{item.label}
+              </button>
+            ))}
+          </div>
+        )}
+
         <nav className="ast-bottom-nav" aria-label="Primary">
-          {MOBILE_TABS.map(tab => (
-            <button
-              key={tab.id}
-              type="button"
-              className={`ast-bottom-nav-item${nav === tab.id ? " ast-active" : ""}`}
-              onClick={() => goNav(tab.id)}
-            >
-              <NavIcon id={tab.id}/>
-              {tab.label}
-            </button>
-          ))}
+          {MOBILE_TABS.map(tab => {
+            const isMore = tab.id === "more";
+            const active = isMore ? mobileMoreActive : nav === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                className={`ast-bottom-nav-item${active ? " ast-active" : ""}`}
+                onClick={() => isMore ? setMoreOpen(o => !o) : goNav(tab.id)}
+              >
+                <NavIcon id={tab.id}/>
+                {tab.label}
+              </button>
+            );
+          })}
         </nav>
       </div>
       </div>
     </div>
     </ViewportContext.Provider>
+  );
+}
+
+export default function AstreyaApp({ children }) {
+  return (
+    <MatterProvider>
+      <AstreyaShellInner>{children}</AstreyaShellInner>
+    </MatterProvider>
   );
 }

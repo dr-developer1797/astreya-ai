@@ -2,12 +2,19 @@
 
 import { useState, useRef, useCallback } from "react";
 import { C, F } from "@/shared/constants/theme";
+import Btn from "@/shared/ui/Btn";
+import ViewHeader from "@/shared/ui/ViewHeader";
 import ExportModal from "@/shared/modals/ExportModal";
+import { isAbortError } from "@/shared/llm/errors";
 import { callLLM, extractResponse } from "@/shared/llm/client";
 import { RISK_COLORS, RISK_BG, CONTRACT_TYPES, SAMPLE_CONTRACT } from "@/features/due-diligence/constants";
 import { countWords } from "@/shared/utils/text";
+import { useAbortController } from "@/shared/hooks/useAbortController";
+import { useTimeoutCleanup } from "@/shared/hooks/useTimeoutCleanup";
 
 export default function RiskReviewView() {
+  const { getSignal, getGeneration, isStaleGeneration } = useAbortController();
+  const { scheduleTimeout, scheduleInterval, clearScheduled } = useTimeoutCleanup();
   const [stage, setStage]           = useState("upload");   // upload | analysing | results
   const [contractText, setContractText] = useState("");
   const [contractType, setContractType] = useState("");
@@ -32,11 +39,6 @@ export default function RiskReviewView() {
     ];
     let mi = 0;
     setStatusMsg(msgs[0]);
-    const ticker = setInterval(() => {
-      mi = Math.min(mi + 1, msgs.length - 1);
-      setStatusMsg(msgs[mi]);
-      setProgress(p => Math.min(p + Math.floor(Math.random() * 14) + 6, 88));
-    }, 1800);
 
     const sys = `You are a senior Indian contracts lawyer specialising in risk analysis. Analyse the provided contract from the perspective of ${persp === "party_a" ? "Party A (first party)" : persp === "party_b" ? "Party B (second party)" : "a neutral reviewer"}. Return ONLY valid JSON — no markdown, no explanation, no code fences. Use this exact schema:
 {
@@ -62,20 +64,41 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
 
     const usr = `Contract Type: ${ctype || "Unknown"}\nParty Perspective: ${persp}\n\n${text}`;
 
+    const signal = getSignal();
+    const gen = getGeneration();
+    let ticker;
     try {
-      const res = await callLLM({ sys, messages:[{role:"user",content:usr}], stream:false });
-      clearInterval(ticker);
+      ticker = scheduleInterval(() => {
+        if (isStaleGeneration(gen)) return;
+        mi = Math.min(mi + 1, msgs.length - 1);
+        setStatusMsg(msgs[mi]);
+        setProgress(p => Math.min(p + Math.floor(Math.random() * 14) + 6, 88));
+      }, 1800);
+
+      const res = await callLLM({ sys, messages:[{role:"user",content:usr}], stream:false, signal });
+      if (isStaleGeneration(gen)) return;
+      clearScheduled(ticker);
       setProgress(95);
       const data = await res.json();
       const raw  = extractResponse(data) || "{}";
-      // strip any accidental markdown fences
       const clean = raw.replace(/```json|```/gi, "").trim();
       const parsed = JSON.parse(clean);
+      if (isStaleGeneration(gen)) return;
       setResults(parsed);
       setProgress(100);
-      setTimeout(() => { setStage("results"); setActiveRisk(parsed.risks?.[0] || null); }, 500);
+      scheduleTimeout(() => {
+        if (!isStaleGeneration(gen)) {
+          setStage("results");
+          setActiveRisk(parsed.risks?.[0] || null);
+        }
+      }, 500);
     } catch (err) {
-      clearInterval(ticker);
+      clearScheduled(ticker);
+      if (isAbortError(err) || isStaleGeneration(gen)) {
+        setStage("upload");
+        setProgress(0);
+        return;
+      }
       setResults({
         overall_score: 0, contract_type_detected: ctype,
         summary: `Analysis error: ${err.message}. Please try again.`,
@@ -83,7 +106,7 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
       });
       setStage("results");
     }
-  }, []);
+  }, [getSignal, getGeneration, isStaleGeneration, scheduleInterval, scheduleTimeout, clearScheduled]);
 
   const handleAnalyse = () => {
     const txt = contractText.trim();
@@ -94,6 +117,11 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
   const loadSample = () => setContractText(SAMPLE_CONTRACT);
 
   const filteredRisks = results?.risks?.filter(r => filterLevel === "ALL" || r.risk_level === filterLevel) || [];
+  const displayRisk = activeRisk && filteredRisks.some(r => r.id === activeRisk.id)
+    ? activeRisk
+    : (filteredRisks[0] || null);
+  const activeIndex = displayRisk ? filteredRisks.findIndex(r => r.id === displayRisk.id) : -1;
+
   const scoreColor = results
     ? results.overall_score >= 8 ? RISK_COLORS.CRITICAL
       : results.overall_score >= 6 ? RISK_COLORS.HIGH
@@ -104,16 +132,10 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
   /* ─ UPLOAD STAGE ─ */
   if (stage === "upload") return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-      <div style={{height:52,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 22px",background:C.bgPanel,flexShrink:0}}>
-        <div style={{display:"flex",alignItems:"center",gap:8,fontSize:12}}>
-          <span style={{color:C.textSec}}>Due Diligence</span>
-          <span style={{color:C.textMut}}>›</span>
-          <span style={{color:C.textPri}}>Upload Contract</span>
-        </div>
-        <button onClick={loadSample} style={{fontSize:11,color:C.textMut,background:"transparent",border:`1px solid ${C.border}`,borderRadius:5,padding:"5px 12px",cursor:"pointer",fontFamily:F.sans,transition:"all 0.15s"}} onMouseEnter={e=>{e.currentTarget.style.color=C.textPri;e.currentTarget.style.borderColor=C.borderMid;}} onMouseLeave={e=>{e.currentTarget.style.color=C.textMut;e.currentTarget.style.borderColor=C.border;}}>
-          Load Sample NDA
-        </button>
-      </div>
+      <ViewHeader
+        crumbs={[{ label: "Due Diligence" }, { label: "Upload Contract" }]}
+        actions={<Btn compact onClick={loadSample}>Load Sample NDA</Btn>}
+      />
 
       <div style={{flex:1,overflowY:"auto",padding:"28px 34px"}}>
         <div style={{maxWidth:780}}>
@@ -232,30 +254,31 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
 
   return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-      {/* topbar */}
-      <div className="ast-view-header" style={{height:52,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 20px",background:C.bgPanel,flexShrink:0}}>
-        <div className="ast-view-header-title" style={{display:"flex",alignItems:"center",gap:8,fontSize:12,minWidth:0,flexWrap:"wrap"}}>
-          <span onClick={()=>setStage("upload")} style={{color:C.textSec,cursor:"pointer"}} onMouseEnter={e=>e.target.style.color=C.textPri} onMouseLeave={e=>e.target.style.color=C.textSec}>Due Diligence</span>
-          <span style={{color:C.textMut}}>›</span>
-          <span style={{color:C.textPri,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:180}}>{results?.contract_type_detected || contractType || "Contract"}</span>
-          <span style={{color:C.textMut,margin:"0 4px"}}>·</span>
-          <div style={{display:"flex",alignItems:"center",gap:5}}>
-            <div style={{width:6,height:6,borderRadius:"50%",background:scoreColor,animation:"pulse 2s infinite"}}/>
-            <span style={{fontSize:9,color:scoreColor,letterSpacing:"0.08em",fontWeight:600}}>RISK {results?.overall_score?.toFixed(1)}/10</span>
+      <ViewHeader
+        crumbs={[
+          { label: "Due Diligence", onClick: () => setStage("upload") },
+          { label: results?.contract_type_detected || contractType || "Contract", maxWidth: 180 },
+        ]}
+        status={
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <div style={{ width: 6, height: 6, borderRadius: "50%", background: scoreColor, animation: "pulse 2s infinite" }} />
+            <span style={{ fontSize: 9, color: scoreColor, letterSpacing: "0.08em", fontWeight: 600 }}>RISK {results?.overall_score?.toFixed(1)}/10</span>
           </div>
-        </div>
-        <div className="ast-view-header-actions ast-filter-row" style={{display:"flex",gap:7}}>
-          {["ALL","CRITICAL","HIGH","MEDIUM","LOW"].map(lvl=>(
-            <div key={lvl} onClick={()=>setFilterLevel(lvl)}
-              style={{padding:"4px 10px",borderRadius:4,border:`1px solid ${filterLevel===lvl?(RISK_COLORS[lvl]||C.red):C.border}`,background:filterLevel===lvl?(RISK_BG[lvl]||C.redFaint):"transparent",fontSize:9,color:filterLevel===lvl?(RISK_COLORS[lvl]||C.red):C.textMut,cursor:"pointer",letterSpacing:"0.07em",fontFamily:F.sans,fontWeight:600,transition:"all 0.15s"}}>
-              {lvl}{lvl!=="ALL"&&countByLevel(lvl)>0&&<span style={{marginLeft:4,opacity:0.7}}>·{countByLevel(lvl)}</span>}
-            </div>
-          ))}
-          <div style={{width:1,height:20,background:C.border,alignSelf:"center",margin:"0 2px"}}/>
-          <button onClick={()=>setStage("upload")} style={{padding:"5px 12px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:5,color:C.textSec,fontSize:11,cursor:"pointer",fontFamily:F.sans}}>← New Review</button>
-          <button onClick={()=>setExportModal(true)} style={{padding:"5px 12px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:5,color:C.textSec,fontSize:11,cursor:"pointer",fontFamily:F.sans}}>↓ Export Word</button>
-        </div>
-      </div>
+        }
+        actions={
+          <div className="ast-filter-row" style={{ display: "flex", gap: 7 }}>
+            {["ALL", "CRITICAL", "HIGH", "MEDIUM", "LOW"].map((lvl) => (
+              <div key={lvl} onClick={() => setFilterLevel(lvl)}
+                style={{ padding: "4px 10px", borderRadius: 4, border: `1px solid ${filterLevel === lvl ? (RISK_COLORS[lvl] || C.red) : C.border}`, background: filterLevel === lvl ? (RISK_BG[lvl] || C.redFaint) : "transparent", fontSize: 9, color: filterLevel === lvl ? (RISK_COLORS[lvl] || C.red) : C.textMut, cursor: "pointer", letterSpacing: "0.07em", fontFamily: F.sans, fontWeight: 600, transition: "all 0.15s" }}>
+                {lvl}{lvl !== "ALL" && countByLevel(lvl) > 0 && <span style={{ marginLeft: 4, opacity: 0.7 }}>·{countByLevel(lvl)}</span>}
+              </div>
+            ))}
+            <div style={{ width: 1, height: 20, background: C.border, alignSelf: "center", margin: "0 2px" }} />
+            <Btn compact onClick={() => setStage("upload")}>← New Review</Btn>
+            <Btn compact onClick={() => setExportModal(true)}>↓ Export Word</Btn>
+          </div>
+        }
+      />
 
       <div className="ast-three-col" style={{flex:1,display:"flex",overflow:"hidden"}}>
 
@@ -299,7 +322,7 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
             )}
             {filteredRisks.map((risk,i)=>{
               const col = RISK_COLORS[risk.risk_level] || C.textMut;
-              const isActive = activeRisk?.id === risk.id;
+              const isActive = displayRisk?.id === risk.id;
               return (
                 <div key={risk.id} onClick={()=>setActiveRisk(risk)}
                   style={{background:isActive?`${col}0D`:C.bgCard,border:`1px solid ${isActive?col:C.border}`,borderRadius:8,padding:"11px 12px",marginBottom:7,cursor:"pointer",transition:"all 0.15s",animation:`fadeUp 0.3s ease ${i*0.05}s both`}}
@@ -319,7 +342,7 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
 
         {/* ── CENTRE: active risk detail ── */}
         <div className="ast-content-pad ast-split-detail" style={{flex:1,overflowY:"auto",padding:"24px 28px",minWidth:0}}>
-          {!activeRisk ? (
+          {!displayRisk ? (
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100%",gap:10,color:C.textMut}}>
               <div style={{fontSize:24}}>⚑</div>
               <div style={{fontSize:13,fontFamily:F.sans}}>Select a risk to see details</div>
@@ -329,50 +352,52 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
               {/* risk header */}
               <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:20,gap:16}}>
                 <div>
-                  <div style={{fontSize:9,color:C.textMut,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:5,fontFamily:F.sans}}>{activeRisk.clause_ref}</div>
-                  <div style={{fontFamily:F.serif,fontSize:22,fontWeight:600,color:C.textPri,lineHeight:1.25}}>{activeRisk.risk_type}</div>
+                  <div style={{fontSize:9,color:C.textMut,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:5,fontFamily:F.sans}}>{displayRisk.clause_ref}</div>
+                  <div style={{fontFamily:F.serif,fontSize:22,fontWeight:600,color:C.textPri,lineHeight:1.25}}>{displayRisk.risk_type}</div>
                 </div>
                 <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:6,flexShrink:0}}>
-                  <span style={{fontSize:11,color:RISK_COLORS[activeRisk.risk_level],background:RISK_BG[activeRisk.risk_level],border:`1px solid ${RISK_COLORS[activeRisk.risk_level]}44`,borderRadius:5,padding:"4px 12px",fontWeight:600,letterSpacing:"0.07em"}}>{activeRisk.risk_level} RISK</span>
+                  <span style={{fontSize:11,color:RISK_COLORS[displayRisk.risk_level],background:RISK_BG[displayRisk.risk_level],border:`1px solid ${RISK_COLORS[displayRisk.risk_level]}44`,borderRadius:5,padding:"4px 12px",fontWeight:600,letterSpacing:"0.07em"}}>{displayRisk.risk_level} RISK</span>
                 </div>
               </div>
 
               {/* clause excerpt */}
-              <div style={{background:C.bgCard,border:`1px solid ${C.border}`,borderLeft:`3px solid ${RISK_COLORS[activeRisk.risk_level]}`,borderRadius:"0 8px 8px 0",padding:"14px 16px",marginBottom:20}}>
+              <div style={{background:C.bgCard,border:`1px solid ${C.border}`,borderLeft:`3px solid ${RISK_COLORS[displayRisk.risk_level]}`,borderRadius:"0 8px 8px 0",padding:"14px 16px",marginBottom:20}}>
                 <div style={{fontSize:9,color:C.textMut,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:7,fontFamily:F.sans}}>Clause Excerpt</div>
-                <p style={{fontSize:12.5,color:C.textPri,fontFamily:F.sans,fontWeight:300,lineHeight:1.8,fontStyle:"italic"}}>&ldquo;{activeRisk.clause_excerpt}&rdquo;</p>
+                <p style={{fontSize:12.5,color:C.textPri,fontFamily:F.sans,fontWeight:300,lineHeight:1.8,fontStyle:"italic"}}>&ldquo;{displayRisk.clause_excerpt}&rdquo;</p>
               </div>
 
               {/* issue */}
               <div style={{marginBottom:18}}>
                 <div style={{fontSize:9,color:C.textMut,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:8,fontFamily:F.sans}}>Issue</div>
-                <p style={{fontSize:13,color:C.textPri,fontFamily:F.sans,fontWeight:300,lineHeight:1.8}}>{activeRisk.issue}</p>
+                <p style={{fontSize:13,color:C.textPri,fontFamily:F.sans,fontWeight:300,lineHeight:1.8}}>{displayRisk.issue}</p>
               </div>
 
               {/* legal basis */}
               <div style={{display:"flex",alignItems:"baseline",gap:10,marginBottom:20,padding:"10px 14px",background:C.goldDim,borderLeft:`2px solid ${C.gold}`,borderRadius:"0 6px 6px 0"}}>
                 <span style={{fontSize:11,color:C.gold,fontWeight:500,whiteSpace:"nowrap",fontFamily:F.sans}}>Legal Basis</span>
-                <span style={{fontSize:11.5,color:C.textSec,fontFamily:F.sans}}>{activeRisk.legal_basis}</span>
+                <span style={{fontSize:11.5,color:C.textSec,fontFamily:F.sans}}>{displayRisk.legal_basis}</span>
               </div>
 
               {/* suggested revision */}
               <div style={{background:C.bgCard,border:`1px solid ${C.border}`,borderLeft:`3px solid ${C.green}`,borderRadius:"0 8px 8px 0",padding:"14px 16px",marginBottom:20}}>
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
                   <div style={{fontSize:9,color:C.textMut,letterSpacing:"0.12em",textTransform:"uppercase",fontFamily:F.sans}}>Suggested Revision</div>
-                  <button onClick={()=>navigator.clipboard?.writeText(activeRisk.suggested_revision)} style={{fontSize:9,color:C.textMut,background:"transparent",border:`1px solid ${C.border}`,borderRadius:4,padding:"2px 8px",cursor:"pointer",fontFamily:F.sans}}>Copy</button>
+                  <button onClick={()=>navigator.clipboard?.writeText(displayRisk.suggested_revision)} style={{fontSize:9,color:C.textMut,background:"transparent",border:`1px solid ${C.border}`,borderRadius:4,padding:"2px 8px",cursor:"pointer",fontFamily:F.sans}}>Copy</button>
                 </div>
-                <p style={{fontSize:12.5,color:C.textPri,fontFamily:F.sans,fontWeight:300,lineHeight:1.8}}>{activeRisk.suggested_revision}</p>
+                <p style={{fontSize:12.5,color:C.textPri,fontFamily:F.sans,fontWeight:300,lineHeight:1.8}}>{displayRisk.suggested_revision}</p>
               </div>
 
               {/* nav between risks */}
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",paddingTop:16,borderTop:`1px solid ${C.border}`}}>
-                <button onClick={()=>{const idx=filteredRisks.findIndex(r=>r.id===activeRisk.id);if(idx>0)setActiveRisk(filteredRisks[idx-1]);}}
-                  disabled={filteredRisks.findIndex(r=>r.id===activeRisk.id)===0}
-                  style={{padding:"6px 14px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:5,color:C.textSec,fontSize:11,cursor:"pointer",fontFamily:F.sans,opacity:filteredRisks.findIndex(r=>r.id===activeRisk.id)===0?0.3:1}}>← Previous</button>
-                <span style={{fontSize:11,color:C.textMut,fontFamily:F.sans}}>{filteredRisks.findIndex(r=>r.id===activeRisk.id)+1} of {filteredRisks.length}</span>
-                <button onClick={()=>{const idx=filteredRisks.findIndex(r=>r.id===activeRisk.id);if(idx<filteredRisks.length-1)setActiveRisk(filteredRisks[idx+1]);}}
-                  disabled={filteredRisks.findIndex(r=>r.id===activeRisk.id)===filteredRisks.length-1}
-                  style={{padding:"6px 14px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:5,color:C.textSec,fontSize:11,cursor:"pointer",fontFamily:F.sans,opacity:filteredRisks.findIndex(r=>r.id===activeRisk.id)===filteredRisks.length-1?0.3:1}}>Next →</button>
+                <Btn compact
+                  onClick={()=>{ if(activeIndex>0) setActiveRisk(filteredRisks[activeIndex-1]); }}
+                  disabled={activeIndex<=0}
+                >← Previous</Btn>
+                <span style={{fontSize:11,color:C.textMut,fontFamily:F.sans}}>{activeIndex>=0?activeIndex+1:0} of {filteredRisks.length}</span>
+                <Btn compact
+                  onClick={()=>{ if(activeIndex>=0&&activeIndex<filteredRisks.length-1) setActiveRisk(filteredRisks[activeIndex+1]); }}
+                  disabled={activeIndex<0||activeIndex>=filteredRisks.length-1}
+                >Next →</Btn>
               </div>
             </div>
           )}

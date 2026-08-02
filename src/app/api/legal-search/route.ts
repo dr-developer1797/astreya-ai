@@ -1,3 +1,6 @@
+import { guardApiRequest } from "@/shared/api/guard";
+import { logApiEvent } from "@/shared/api/log";
+
 const IK_BASE = "https://api.indiankanoon.org";
 const MAX_QUERY_LENGTH = 500;
 const SEARCH_TIMEOUT_MS = 15_000;
@@ -106,7 +109,7 @@ function expandActs(text: string): { text: string; names: string[] } {
   return { text: expanded.replace(/\b(Act|Code|Sanhita|Adhiniyam)\s+Act\b/gi, "$1"), names };
 }
 
-function normalizeQuery(raw: string): {
+export function normalizeQuery(raw: string): {
   search: string;
   statute: string;
   anchor: string;
@@ -300,6 +303,10 @@ async function fetchDocument(id: number, apiKey: string) {
 /* ── HANDLER ────────────────────────────────────────────────────────────────── */
 
 export async function POST(req: Request) {
+  const blocked = guardApiRequest(req, "legal-search");
+  if (blocked) return blocked;
+
+  const started = Date.now();
   let payload: { query?: string; page?: number; enrich?: boolean };
 
   try {
@@ -388,6 +395,12 @@ export async function POST(req: Request) {
       }),
     );
   }
+
+  logApiEvent("legal-search.success", {
+    ms: Date.now() - started,
+    sources: sources.length,
+    degraded: failed > 0,
+  });
 
   return Response.json({
     sources,

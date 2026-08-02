@@ -1,5 +1,5 @@
-import AstreyaApp from "@/app-shell/AstreyaApp";
+import { redirect } from "next/navigation";
 
 export default function Home() {
-  return <AstreyaApp />;
+  redirect("/research");
 }

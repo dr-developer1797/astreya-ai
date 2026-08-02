@@ -1,3 +1,6 @@
+import { guardApiRequest } from "@/shared/api/guard";
+import { logApiEvent } from "@/shared/api/log";
+
 const GEMMA_API_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
 const DEFAULT_MODEL = "gemma-4-26b-a4b-it";
 const MAX_INPUT_CHARS = 120_000;
@@ -328,6 +331,10 @@ async function resolveUpstream(
 }
 
 export async function POST(req: Request) {
+  const blocked = guardApiRequest(req, "chat");
+  if (blocked) return blocked;
+
+  const started = Date.now();
   let payload: {
     messages?: unknown;
     sys?: unknown;
@@ -378,6 +385,7 @@ export async function POST(req: Request) {
   if (!result.ok) return result.response;
 
   const upstream = result.upstream;
+  logApiEvent("chat.success", { ms: Date.now() - started, stream });
 
   if (stream && upstream.body) {
     return new Response(toOpenAIStream(upstream.body), {

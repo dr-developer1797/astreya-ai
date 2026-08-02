@@ -3,7 +3,7 @@
 import { C, F } from "@/shared/constants/theme";
 
 const DEMO_DISCLAIMER =
-  "Demo build — no login required. Astreya is in alpha; some features may be limited or incomplete. Work is not persisted across page refresh.";
+  "Demo build — no login required. Astreya is in alpha; some features may be limited or incomplete. Drafts are saved locally in this browser.";
 
 export default function DemoDisclaimerMarquee() {
   const item = (

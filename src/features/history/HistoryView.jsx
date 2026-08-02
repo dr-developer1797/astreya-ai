@@ -3,14 +3,19 @@
 import { useState, useEffect } from "react";
 import { C, F } from "@/shared/constants/theme";
 import Label from "@/shared/ui/Label";
+import ViewHeader from "@/shared/ui/ViewHeader";
 import ExportModal from "@/shared/modals/ExportModal";
 import { listDrafts, deleteDraft } from "@/shared/storage/drafts";
+import { useMatter } from "@/shared/context/MatterContext";
+import { MATTERS } from "@/shared/constants/matters";
 
 export default function HistoryView() {
+  const { matterId } = useMatter();
   const [drafts,   setDrafts]   = useState(null);
   const [selected, setSelected] = useState(null);
   const [search,   setSearch]   = useState("");
   const [filter,   setFilter]   = useState("ALL");
+  const [matterFilter, setMatterFilter] = useState("current");
   const [exportMod,setExportMod]= useState(false);
   const [deleting, setDeleting] = useState(null);
 
@@ -37,10 +42,11 @@ export default function HistoryView() {
   const categories = [...new Set((drafts||[]).map(d=>d.category).filter(Boolean))];
 
   const filtered = (drafts||[]).filter(d=>{
+    const matchM = matterFilter === "all" || d.matterId === matterId || (!d.matterId && matterFilter === "current");
     const matchF = filter==="ALL" || d.category===filter;
     const matchS = !search.trim() ||
       (d.typeLabel+d.category+(d.form?.party_a||"")+(d.form?.party_b||"")+(d.form?.employer||"")+(d.form?.employee||"")+(d.form?.provider||"")).toLowerCase().includes(search.toLowerCase());
-    return matchF && matchS;
+    return matchM && matchF && matchS;
   });
 
   const fmt = iso => {
@@ -69,16 +75,16 @@ export default function HistoryView() {
   return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
       {/* topbar */}
-      <div className="ast-view-header" style={{height:52,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 22px",background:C.bgPanel,flexShrink:0}}>
-        <div className="ast-view-header-title" style={{display:"flex",alignItems:"center",gap:8,fontSize:12,minWidth:0}}>
-          <span style={{color:C.textPri}}>History</span>
-          {drafts!==null && <span style={{color:C.textMut,marginLeft:2}}>— {drafts.length} draft{drafts.length!==1?"s":""}</span>}
-        </div>
-        <div className="ast-view-header-actions ast-hide-mobile" style={{display:"flex",alignItems:"center",gap:6,fontSize:9,color:C.textMut,fontFamily:F.sans}}>
-          <div style={{width:6,height:6,borderRadius:"50%",background:C.green}}/>
-          Drafts saved automatically
-        </div>
-      </div>
+      <ViewHeader
+        crumbs={[{ label: "History" }]}
+        status={drafts !== null && <span style={{ color: C.textMut, marginLeft: 2 }}>— {filtered.length} draft{filtered.length !== 1 ? "s" : ""}</span>}
+        actions={
+          <div className="ast-hide-mobile" style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 9, color: C.textMut, fontFamily: F.sans }}>
+            <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.green }} />
+            Drafts saved automatically
+          </div>
+        }
+      />
 
       <div className="ast-split-row" style={{flex:1,display:"flex",overflow:"hidden"}}>
 
@@ -90,6 +96,14 @@ export default function HistoryView() {
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={C.textMut} strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
               <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search drafts…" style={{flex:1,background:"transparent",border:"none",outline:"none",fontSize:12,color:C.textPri,fontFamily:F.sans,fontWeight:300}}/>
               {search&&<span onClick={()=>setSearch("")} style={{fontSize:14,color:C.textMut,cursor:"pointer",lineHeight:1}}>×</span>}
+            </div>
+            <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:8}}>
+              {[["current", MATTERS.find(m => m.id === matterId)?.label || "Current matter"], ["all", "All matters"]].map(([id, label]) => (
+                <span key={id} onClick={() => setMatterFilter(id)}
+                  style={{ fontSize: 9, color: matterFilter === id ? C.blue : C.textMut, background: matterFilter === id ? `${C.blue}18` : "transparent", border: `1px solid ${matterFilter === id ? C.blue : C.border}`, borderRadius: 3, padding: "2px 8px", cursor: "pointer", fontFamily: F.sans, letterSpacing: "0.05em", transition: "all 0.13s" }}>
+                  {label}
+                </span>
+              ))}
             </div>
             <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
               {["ALL",...categories].map(cat=>(

@@ -5,16 +5,28 @@ import Image from "next/image";
 import { C, F } from "@/shared/constants/theme";
 import Btn from "@/shared/ui/Btn";
 import Spinner from "@/shared/ui/Spinner";
+import Markdown from "@/shared/ui/Markdown";
+import ViewHeader from "@/shared/ui/ViewHeader";
 import { ViewportContext } from "@/shared/hooks/useViewport";
-import { streamChatCompletion } from "@/shared/llm/stream";
+import { useTimeoutCleanup } from "@/shared/hooks/useTimeoutCleanup";
+import { useLLMStream } from "@/shared/hooks/useLLMStream";
+import { isAbortError } from "@/shared/llm/errors";
 import { RESEARCH_SYSTEM, SAMPLE_Q } from "@/features/research/prompts";
 
 
 export default function ResearchView() {
   const { isMobile } = useContext(ViewportContext);
+  const {
+    streaming,
+    text: streamText,
+    stream,
+    getSignal,
+    getGeneration,
+    isStaleGeneration,
+    reset: resetStream,
+  } = useLLMStream();
+  const { scheduleTimeout } = useTimeoutCleanup();
   const [messages,  setMessages]  = useState([]);
-  const [streaming, setStreaming] = useState(false);
-  const [streamText,setStreamText]= useState("");
   const [qval,      setQval]      = useState("");
   const [showSrc,   setShowSrc]   = useState(false);
   const [topic,     setTopic]     = useState("Legal Research");
@@ -22,6 +34,7 @@ export default function ResearchView() {
   const [ikLoading, setIkLoading] = useState(false);
   const [ikError,   setIkError]   = useState("");
   const [ikGrounded,setIkGrounded]= useState(null);   // null until the first query resolves
+  const [demoStreaming, setDemoStreaming] = useState(false);
   const scrollRef = useRef(null);
 
   useEffect(() => {
@@ -35,11 +48,14 @@ export default function ResearchView() {
   const search = useCallback(async (query) => {
     if (!query.trim() || streaming) return;
     const q = query.trim();
+    const signal = getSignal();
+    const gen = getGeneration();
     setQval(""); setTopic(q.length>40?q.slice(0,37)+"\u2026":q);
     setIkError("");
     const userMsg = { role:"user", content:q };
     const history = [...messages, userMsg];
-    setMessages(history); setStreaming(true); setStreamText("");
+    setMessages(history);
+    resetStream();
 
     /* STEP 1 — IndianKanoon retrieval (statutes + Supreme Court + High Courts) */
     let ikDocs = [];
@@ -49,7 +65,9 @@ export default function ResearchView() {
         method:"POST",
         headers:{ "Content-Type":"application/json" },
         body: JSON.stringify({ query:q, page:0 }),
+        signal,
       });
+      if (isStaleGeneration(gen)) return;
       const ikJson = await ikRes.json().catch(()=>({}));
       if (!ikRes.ok) throw new Error(ikJson.error || `Search failed (${ikRes.status})`);
 
@@ -60,10 +78,14 @@ export default function ResearchView() {
       else if (ikDocs.length === 0)     setIkError("No IndianKanoon match for this query — answering without retrieved authority.");
       else if (ikJson.degraded)         setIkError("Part of IndianKanoon did not respond — results may be incomplete.");
     } catch(err) {
+      if (isAbortError(err) || isStaleGeneration(gen)) return;
       setIkError(`IndianKanoon unavailable (${err.message}) — answering without retrieved authority.`);
       setIkGrounded(false);
+    } finally {
+      if (!isStaleGeneration(gen)) setIkLoading(false);
     }
-    setIkLoading(false);
+
+    if (isStaleGeneration(gen)) return;
 
     /* STEP 2 — Build grounding context */
     const fmt = (d) => {
@@ -92,23 +114,28 @@ export default function ResearchView() {
       {role:"user", content:q+ikContext},
     ];
     try {
-      const full = await streamChatCompletion({
+      const full = await stream({
         sys: RESEARCH_SYSTEM,
         messages: apiMessages,
-        onToken: (text) => setStreamText(text),
+        charBudget: 4000,
+        signal,
+        generation: gen,
       });
+      if (!full || isStaleGeneration(gen)) return;
       setMessages(prev=>[...prev,{role:"assistant",content:full}]);
     } catch(err){
+      if (isAbortError(err) || isStaleGeneration(gen)) return;
       setMessages(prev=>[...prev,{role:"assistant",content:`\u26a0 Error: ${err.message}`}]);
     }
-    setStreamText(""); setStreaming(false);
-  }, [messages, streaming]);
+  }, [messages, streaming, getSignal, getGeneration, isStaleGeneration, stream, resetStream]);
 
   const demo = () => {
-    if(streaming)return;
+    if(streaming || demoStreaming)return;
     const dt="Yes. A High Court holds inherent power to quash an FIR under **Section 482, CrPC 1973** (now **Section 528, BNSS 2023**, effective July 1, 2024). This power is discretionary and must be exercised sparingly.\n\n**Governing Framework**\n- Section 482 CrPC / Section 528 BNSS 2023\n- Article 226, Constitution of India\n\n**Seven Bhajan Lal Grounds** [1992 Supp (1) SCC 335]\n\n01. Allegations do not constitute a cognisable offence at face value\n02. Allegations are manifestly absurd or inherently impossible\n03. Offence not cognisable — police had no authority\n04. Prosecution attended with mala fide intent\n05. Proceeding filed to wreak vengeance or settle scores\n06. Continuing would amount to abuse of process\n07. Legal bar against initiation or continuance\n\n**Key Precedents**\n- *State of Haryana v. Bhajan Lal* — 1992 Supp (1) SCC 335\n- *Neeharika Infrastructure v. State of Maharashtra* — (2021) 19 SCC 401\n- *Pepsi Foods Ltd. v. Special Judicial Magistrate* — (1998) 5 SCC 749\n\n\u26a0 Research output only — verify with primary sources and consult a qualified advocate.";
     setMessages([{role:"user",content:SAMPLE_Q},{role:"assistant",content:""}]);
-    setTopic("Criminal Procedure"); setStreaming(true); setStreamText("");
+    setTopic("Criminal Procedure");
+    resetStream();
+    setDemoStreaming(true);
     setIkError(""); setIkGrounded(true);
     setIkSources([
       {id:"1306176",kind:"statute", title:"Section 482 in The Code of Criminal Procedure, 1973",court:"Union of India - Section",date:"1974-01-25",citedBy:644872,url:"https://indiankanoon.org/doc/1306176/",ref:1,snippet:"Saving of inherent powers of High Court."},
@@ -118,63 +145,50 @@ export default function ResearchView() {
     ]);
     let i=0; let acc="";
     const tick=()=>{
-      if(i>=dt.length){setMessages([{role:"user",content:SAMPLE_Q},{role:"assistant",content:dt}]);setStreamText("");setStreaming(false);return;}
-      acc+=dt[i++]; setStreamText(acc);
+      if(i>=dt.length){setMessages([{role:"user",content:SAMPLE_Q},{role:"assistant",content:dt}]);setDemoStreaming(false);return;}
+      acc+=dt[i++];
       setMessages(prev=>{const n=[...prev];n[n.length-1]={role:"assistant",content:acc};return n;});
-      setTimeout(tick,10);
+      scheduleTimeout(tick, 10);
     };
-    setTimeout(tick,300);
+    scheduleTimeout(tick, 300);
   };
 
   const handleKey = e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();search(qval);}};
 
-  const renderMd = (text) => text.split("\n").map((line,i)=>{
-    const bold=s=>{const ps=s.split(/(\*\*[^*]+\*\*)/g);return ps.map((p,j)=>p.startsWith("**")?<strong key={j} style={{color:C.textPri,fontWeight:600}}>{p.slice(2,-2)}</strong>:p);};
-    const it=s=>{const ps=s.split(/(\*[^*]+\*)/g);return ps.map((p,j)=>p.startsWith("*")&&!p.startsWith("**")?<em key={j} style={{fontStyle:"italic"}}>{p.slice(1,-1)}</em>:bold(p));};
-    if(/^\d{2}\.\ /.test(line)){const m=line.match(/^(\d{2})\.\s(.*)/);return <div key={i} style={{display:"flex",gap:9,marginBottom:6}}><span style={{color:C.red,fontWeight:700,fontFamily:"monospace",fontSize:11,minWidth:22,flexShrink:0,marginTop:2}}>{m[1]}.</span><span style={{fontSize:13,color:C.textPri,lineHeight:1.7,fontFamily:F.sans,fontWeight:300}}>{it(m[2])}</span></div>;}
-    // Hash headings and pipe tables are both common in the model's output; without these two
-    // branches they reach the reader as literal "###" and "| :--- |" syntax.
-    if(/^#{1,6}\s/.test(line)){
-      const m=line.match(/^(#{1,6})\s+(.*)/); const top=m[1].length<=2;
-      return <div key={i} style={{fontSize:top?14:10,fontWeight:top?600:700,letterSpacing:top?"0.01em":"0.1em",textTransform:top?"none":"uppercase",color:top?C.textPri:C.textSec,marginTop:i>0?18:0,marginBottom:8,borderBottom:`1px solid ${C.border}`,paddingBottom:7,fontFamily:top?F.serif:F.sans}}>{it(m[2])}</div>;
-    }
-    if(/^\s*\|.*\|?\s*$/.test(line)&&line.includes("|")){
-      const cells=line.trim().replace(/^\||\|$/g,"").split("|").map(c=>c.trim());
-      if(cells.every(c=>/^:?-{2,}:?$/.test(c)))return null;
-      return <div key={i} style={{display:"flex",gap:10,padding:"6px 0",borderBottom:`1px solid ${C.border}`}}>
-        {cells.map((c,j)=><div key={j} style={{flex:j===0?"0 0 36%":1,fontSize:12,color:j===0?C.textPri:C.textSec,fontFamily:F.sans,fontWeight:j===0?500:300,lineHeight:1.6}}>{it(c)}</div>)}
-      </div>;
-    }
-    if(line.startsWith("**")&&line.endsWith("**"))return <div key={i} style={{fontSize:10,fontWeight:700,letterSpacing:"0.1em",textTransform:"uppercase",color:C.textSec,marginBottom:8,marginTop:i>0?18:0,borderBottom:`1px solid ${C.border}`,paddingBottom:7,fontFamily:F.sans}}>{line.slice(2,-2)}</div>;
-    if(line.startsWith("- "))return <div key={i} style={{display:"flex",gap:8,marginBottom:5}}><span style={{color:C.red,fontSize:11,marginTop:3,flexShrink:0}}>▸</span><span style={{fontSize:13,color:C.textPri,lineHeight:1.7,fontFamily:F.sans,fontWeight:300}}>{it(line.slice(2))}</span></div>;
-    if(line.startsWith("\u26a0"))return <div key={i} style={{marginTop:14,padding:"9px 13px",background:`${C.amber}0E`,border:`1px solid ${C.amber}33`,borderRadius:6,fontSize:11,color:C.amber,fontFamily:F.sans,lineHeight:1.55}}>{line}</div>;
-    if(line.trim()==="")return <div key={i} style={{height:5}}/>;
-    return <p key={i} style={{fontSize:13,color:C.textPri,lineHeight:1.8,marginBottom:4,fontFamily:F.sans,fontWeight:300}}>{it(line)}</p>;
-  });
-
   return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-      <div className="ast-view-header" style={{height:52,borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",padding:"0 22px",background:C.bgPanel,flexShrink:0}}>
-        <div className="ast-view-header-title" style={{display:"flex",alignItems:"center",gap:8,fontSize:12,minWidth:0}}>
-          <span style={{color:C.textSec}}>Research</span><span style={{color:C.textMut}}>›</span>
-          <span style={{color:C.textPri,maxWidth:240,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{topic}</span>
-          {(streaming||ikLoading)&&<div style={{display:"flex",alignItems:"center",gap:5,marginLeft:4}}><div style={{width:5,height:5,borderRadius:"50%",background:ikLoading?C.gold:C.red,animation:"pulse 1s infinite"}}/><span style={{fontSize:9,color:ikLoading?C.gold:C.red,letterSpacing:"0.08em"}}>{ikLoading?"FETCHING CASES\u2026":"GENERATING\u2026"}</span></div>}
-        </div>
-        <div className="ast-view-header-actions" style={{display:"flex",gap:7,alignItems:"center"}}>
-          {/* Reflects the actual state of retrieval, so the badge never implies grounding that failed. */}
-          {(()=>{ const ok=ikGrounded!==false, tone=ok?C.gold:C.amber;
-            return (
-              <div style={{display:"flex",alignItems:"center",gap:5,padding:"3px 9px",background:`${tone}12`,border:`1px solid ${tone}33`,borderRadius:4}} title={ikError||"Answers grounded on live IndianKanoon sources"}>
-                <div style={{width:5,height:5,borderRadius:"50%",background:ikGrounded===null?C.textMut:ok?C.green:C.amber}}/>
-                <span style={{fontSize:9,color:tone,letterSpacing:"0.07em",fontFamily:F.sans}}>{ok?"IndianKanoon Live":"Ungrounded"}</span>
-              </div>
-            ); })()}
-          <Btn onClick={demo} className="ast-hide-mobile">↻ Demo Mode</Btn>
-          <Btn onClick={()=>setShowSrc(s=>!s)} style={showSrc?{borderColor:C.red,color:C.red,background:C.redFaint}:{}}>
-            {showSrc?"Hide Sources":"Sources"}{ikSources.length>0?` (${ikSources.length})`:""}
-          </Btn>
-        </div>
-      </div>
+      <ViewHeader
+        crumbs={[
+          { label: "Research", muted: true },
+          { label: topic, maxWidth: 240 },
+        ]}
+        status={(streaming || demoStreaming || ikLoading) && (
+          <div style={{ display: "flex", alignItems: "center", gap: 5, marginLeft: 4 }}>
+            <div style={{ width: 5, height: 5, borderRadius: "50%", background: ikLoading ? C.gold : C.red, animation: "pulse 1s infinite" }} />
+            <span style={{ fontSize: 9, color: ikLoading ? C.gold : C.red, letterSpacing: "0.08em" }}>
+              {ikLoading ? "FETCHING CASES…" : "GENERATING…"}
+            </span>
+          </div>
+        )}
+        actions={
+          <>
+            {(() => {
+              const ok = ikGrounded !== false;
+              const tone = ok ? C.gold : C.amber;
+              return (
+                <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "3px 9px", background: `${tone}12`, border: `1px solid ${tone}33`, borderRadius: 4 }} title={ikError || "Answers grounded on live IndianKanoon sources"}>
+                  <div style={{ width: 5, height: 5, borderRadius: "50%", background: ikGrounded === null ? C.textMut : ok ? C.green : C.amber }} />
+                  <span style={{ fontSize: 9, color: tone, letterSpacing: "0.07em", fontFamily: F.sans }}>{ok ? "IndianKanoon Live" : "Ungrounded"}</span>
+                </div>
+              );
+            })()}
+            <Btn onClick={demo} className="ast-hide-mobile">↻ Demo Mode</Btn>
+            <Btn onClick={() => setShowSrc((s) => !s)} style={showSrc ? { borderColor: C.red, color: C.red, background: C.redFaint } : {}}>
+              {showSrc ? "Hide Sources" : "Sources"}{ikSources.length > 0 ? ` (${ikSources.length})` : ""}
+            </Btn>
+          </>
+        }
+      />
 
       <div style={{flex:1,display:"flex",overflow:"hidden"}}>
         <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
@@ -212,7 +226,7 @@ export default function ResearchView() {
                         <span style={{fontSize:9,color:C.textMut,letterSpacing:"0.08em"}}>INDIAN LAW RESEARCH</span>
                         {mi===messages.length-1&&streaming&&[0,1,2].map(i=><div key={i} style={{width:4,height:4,borderRadius:"50%",background:C.red,animation:`shimmer 1.2s ease ${i*0.2}s infinite`}}/>)}
                       </div>
-                      <div style={{fontFamily:F.sans}}>{renderMd(mi===messages.length-1&&streaming?streamText:msg.content)}</div>
+                      <div style={{fontFamily:F.sans}}><Markdown text={mi===messages.length-1&&streaming?streamText:msg.content} variant="research" /></div>
                       {msg.role==="assistant"&&msg.content&&mi===messages.length-1&&!streaming&&(
                         <div style={{display:"flex",gap:5,marginTop:12,paddingTop:11,borderTop:`1px solid ${C.border}`}}>
                           {["Copy","Save to Matter"].map(l=><Btn key={l} onClick={()=>l==="Copy"&&navigator.clipboard?.writeText(msg.content)}>{l}</Btn>)}
@@ -232,7 +246,7 @@ export default function ResearchView() {
                     <span style={{fontSize:12,color:C.textPri,fontWeight:600}}>Astreya</span>
                     {[0,1,2].map(i=><div key={i} style={{width:4,height:4,borderRadius:"50%",background:C.red,animation:`shimmer 1.2s ease ${i*0.2}s infinite`}}/>)}
                   </div>
-                  {streamText?renderMd(streamText):<div style={{display:"flex",gap:6,alignItems:"center"}}><Spinner/><span style={{fontSize:11,color:C.textMut,fontFamily:F.sans}}>{ikLoading?"Searching IndianKanoon\u2026":"Analysing\u2026"}</span></div>}
+                  {streamText?<Markdown text={streamText} variant="research" />:<div style={{display:"flex",gap:6,alignItems:"center"}}><Spinner/><span style={{fontSize:11,color:C.textMut,fontFamily:F.sans}}>{ikLoading?"Searching IndianKanoon\u2026":"Analysing\u2026"}</span></div>}
                 </div>
               </div>
             )}
