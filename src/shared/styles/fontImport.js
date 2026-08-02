@@ -11,9 +11,6 @@ export const FONT_IMPORT = `
   @keyframes shimmer { 0%{opacity:0.4;} 50%{opacity:1;} 100%{opacity:0.4;} }
   @keyframes spin    { from{transform:rotate(0deg);} to{transform:rotate(360deg);} }
   @keyframes blink   { 0%,100%{opacity:1;} 50%{opacity:0;} }
-  @keyframes demoMarquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
-  .demo-marquee-track { animation: demoMarquee 42s linear infinite; will-change: transform; }
-  .demo-marquee-track:hover { animation-play-state: paused; }
   @keyframes slideUp { from { transform: translateY(100%); opacity: 0.85; } to { transform: translateY(0); opacity: 1; } }
 
   .ast-root { height: 100vh; height: 100dvh; overflow: hidden; }
@@ -179,8 +176,6 @@ export const FONT_IMPORT = `
     .ast-filter-row > * { flex-shrink: 0 !important; }
     .ast-doc-grid { grid-template-columns: 1fr !important; }
     .ast-export-modal { width: calc(100vw - 32px) !important; max-width: 420px !important; padding: 20px 18px !important; margin: 16px !important; }
-    .ast-marquee-bar { height: 24px !important; }
-    .ast-demo-marquee-track { font-size: 9px !important; }
     .ast-editor-side { width: 100% !important; max-height: 36vh !important; border-left: none !important; border-top: 1px solid #22232F !important; }
     .ast-intake-actions { flex-wrap: wrap !important; gap: 6px !important; }
     .ast-intake-actions > * { flex: 1 1 auto; }

@@ -11,7 +11,6 @@ import { NAV_ROUTES, navIdFromPath } from "@/shared/constants/routes";
 import { MATTERS } from "@/shared/constants/matters";
 import { MatterProvider, useMatter } from "@/shared/context/MatterContext";
 import { useViewport, ViewportContext } from "@/shared/hooks/useViewport";
-import DemoDisclaimerMarquee from "@/shared/ui/DemoDisclaimerMarquee";
 
 function AstreyaShellInner({ children }) {
   const viewport = useViewport();
@@ -69,7 +68,6 @@ function AstreyaShellInner({ children }) {
     <ViewportContext.Provider value={viewport}>
     <div className="ast-root" style={{fontFamily:F.sans,background:C.bg,height:"100vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
       <style>{FONT_IMPORT}</style>
-      <DemoDisclaimerMarquee />
 
       <div
         className={`ast-backdrop${menuOpen || moreOpen ? " ast-visible" : ""}`}
