@@ -12,6 +12,7 @@ import { useTimeoutCleanup } from "@/shared/hooks/useTimeoutCleanup";
 import { useLLMStream } from "@/shared/hooks/useLLMStream";
 import { isAbortError } from "@/shared/llm/errors";
 import { RESEARCH_SYSTEM, SAMPLE_Q } from "@/features/research/prompts";
+import IndianKanoonAttribution from "@/features/research/IndianKanoonAttribution";
 
 
 export default function ResearchView() {
@@ -94,7 +95,7 @@ export default function ResearchView() {
       if (d.citation) lines.push(`    Reported at: ${d.citation}`);
       lines.push(`    Source: ${d.court||"N/A"} | Date: ${d.date||"N/A"} | Cited by ${d.citedBy} documents`);
       lines.push(`    URL: ${d.url}`);
-      if (d.fullText)     lines.push(`    Verbatim extract: ${d.fullText}`);
+      if (d.fullText)     lines.push(`    Query-matched excerpt: ${d.fullText}`);
       else if (d.snippet) lines.push(`    Matched passage: ${d.snippet}`);
       return lines.join("\n");
     };
@@ -199,7 +200,8 @@ export default function ResearchView() {
                   <Image src="/astreya-logo-light.png" alt="" width={635} height={520} style={{width:26,height:21,objectFit:"contain"}}/>
                 </div>
                 <div style={{fontFamily:F.serif,fontSize:20,fontWeight:600,color:C.textPri}}>Ask Astreya anything</div>
-                <p style={{fontSize:12,color:C.textSec,fontFamily:F.sans,fontWeight:300,textAlign:"center",maxWidth:380,lineHeight:1.6}}>Powered by IndianKanoon — answers drawn from real Indian case law and statutes.</p>
+                <p style={{fontSize:12,color:C.textSec,fontFamily:F.sans,fontWeight:300,textAlign:"center",maxWidth:380,lineHeight:1.6,marginBottom:4}}>Answers drawn from live Indian statutes and case law.</p>
+                <IndianKanoonAttribution />
                 <div style={{display:"flex",flexWrap:"wrap",gap:7,justifyContent:"center",maxWidth:480,marginTop:4}}>
                   {["Can FIR be quashed under S.482 CrPC?","Rights of accused under BNSS 2023","Cheque bounce procedure S.138 NI Act","Bail under NDPS Act","Director liability under IBC 2016","DPDP Act 2023 obligations"].map(s=>(
                     <span key={s} onClick={()=>search(s)} style={{fontSize:11,color:C.textSec,background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:5,padding:"5px 11px",cursor:"pointer",fontFamily:F.sans,transition:"all 0.14s"}} onMouseEnter={e=>{e.currentTarget.style.borderColor=C.red;e.currentTarget.style.color=C.red;}} onMouseLeave={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.color=C.textSec;}}>{s}</span>
@@ -272,8 +274,9 @@ export default function ResearchView() {
             {isMobile&&<div className="ast-panel-overlay-backdrop" onClick={()=>setShowSrc(false)} aria-hidden="true"/>}
             <div className={`ast-panel-r${isMobile?"":" ast-panel-r-narrow"}`} style={{width:272,borderLeft:`1px solid ${C.border}`,background:C.bgPanel,display:"flex",flexDirection:"column",overflow:"hidden",animation:"slideIn 0.22s ease"}}>
             <div style={{padding:"13px 14px",borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
+              <div style={{marginBottom:8}}><IndianKanoonAttribution compact /></div>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}>
-                <div style={{fontSize:9,color:C.textMut,letterSpacing:"0.13em",textTransform:"uppercase"}}>IndianKanoon Results</div>
+                <div style={{fontSize:9,color:C.textMut,letterSpacing:"0.13em",textTransform:"uppercase"}}>Search Results</div>
                 <div style={{display:"flex",alignItems:"center",gap:6}}>
                   {ikLoading&&<Spinner/>}
                   {ikSources.length>0&&<span style={{fontSize:10,color:C.gold,fontWeight:600}}>{ikSources.length}</span>}

@@ -15,10 +15,10 @@ const TIERS = [
   { kind: "judgment", doctypes: "highcourts", take: 3 },
 ] as const;
 
-// Reporter citations live only in the full document, which runs to ~140KB apiece, so the
-// lookup is capped. Full text is kept for even fewer, to stay inside a local model's context.
+// Enrichment is capped to control latency and API cost. Citations come from docmeta (or a
+// lightweight doc fallback). Query-matched excerpts use docfragment, not full documents.
 const CITATION_LOOKUPS = 4;
-const FULL_TEXT_CHARS = 2200;
+const FRAGMENT_CHARS = 2400;
 const MAX_STATUTES = 2;
 const MAX_JUDGMENTS = 6;
 
@@ -229,11 +229,19 @@ function dedupeKey(title: string): string {
 
 /* ── INDIAN KANOON CALLS ────────────────────────────────────────────────────── */
 
-async function ikPost(path: string, form: URLSearchParams, apiKey: string, timeoutMs: number) {
-  const res = await fetch(`${IK_BASE}${path}`, {
+async function ikPost(
+  path: string,
+  form: URLSearchParams,
+  apiKey: string,
+  timeoutMs: number,
+  query?: Record<string, string>,
+) {
+  const qs = query ? `?${new URLSearchParams(query)}` : "";
+  const res = await fetch(`${IK_BASE}${path}${qs}`, {
     method: "POST",
     headers: {
       Authorization: `Token ${apiKey}`,
+      Accept: "application/json",
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: form.toString(),
@@ -279,25 +287,73 @@ async function searchTier(
 
 const CITATION_BLOCK_RE = /<h3[^>]*class="doc_citations"[^>]*>([\s\S]*?)<\/h3>/i;
 
-function extractCitation(docHtml: string): string {
-  const match = docHtml.match(CITATION_BLOCK_RE);
-  if (!match) return "";
-  const cleaned = toPlainText(match[1]).replace(/^equivalent citations:\s*/i, "");
-  // These lists run long; the first few reporters are enough to identify the judgment.
+function formatReporterCitation(raw: string): string {
+  const cleaned = raw.replace(/^equivalent citations:\s*/i, "").trim();
+  if (!cleaned) return "";
   return cleaned.split(/\s*,\s*/).filter(Boolean).slice(0, 3).join(", ");
 }
 
-async function fetchDocument(id: number, apiKey: string) {
+function extractCitationFromDocHtml(docHtml: string): string {
+  const match = docHtml.match(CITATION_BLOCK_RE);
+  if (!match) return "";
+  return formatReporterCitation(toPlainText(match[1]));
+}
+
+function extractCitationFromMeta(payload: Record<string, unknown>): string {
+  for (const key of ["pubcite", "cite", "doccites", "equivalentcites", "citation"]) {
+    const val = payload[key];
+    if (typeof val === "string" && val.trim()) return formatReporterCitation(val);
+    if (Array.isArray(val)) {
+      const joined = val
+        .map((item) => (typeof item === "string" ? item.trim() : ""))
+        .filter(Boolean)
+        .slice(0, 3)
+        .join(", ");
+      if (joined) return joined;
+    }
+  }
+  return "";
+}
+
+async function fetchDocMetaCitation(id: number, apiKey: string): Promise<string> {
+  const payload = (await ikPost(`/docmeta/${id}/`, new URLSearchParams(), apiKey, DOC_TIMEOUT_MS)) as
+    | Record<string, unknown>
+    | null;
+  if (!payload || typeof payload !== "object") return "";
+  return extractCitationFromMeta(payload);
+}
+
+async function fetchDocHtmlCitation(id: number, apiKey: string): Promise<string> {
   const payload = (await ikPost(`/doc/${id}/`, new URLSearchParams(), apiKey, DOC_TIMEOUT_MS)) as {
     doc?: unknown;
   };
-  if (typeof payload.doc !== "string") return { citation: "", fullText: "" };
+  if (typeof payload.doc !== "string") return "";
+  return extractCitationFromDocHtml(payload.doc);
+}
 
-  const text = toPlainText(payload.doc);
-  return {
-    citation: extractCitation(payload.doc),
-    fullText: text.length > FULL_TEXT_CHARS ? `${text.slice(0, FULL_TEXT_CHARS).trimEnd()}…` : text,
-  };
+async function fetchCitation(id: number, apiKey: string): Promise<string> {
+  try {
+    const fromMeta = await fetchDocMetaCitation(id, apiKey);
+    if (fromMeta) return fromMeta;
+  } catch {
+    /* fall through to doc HTML */
+  }
+  try {
+    return await fetchDocHtmlCitation(id, apiKey);
+  } catch {
+    return "";
+  }
+}
+
+async function fetchDocFragment(id: number, formInput: string, apiKey: string): Promise<string> {
+  const payload = (await ikPost(
+    `/docfragment/${id}/`,
+    new URLSearchParams({ formInput }),
+    apiKey,
+    DOC_TIMEOUT_MS,
+  )) as { headline?: unknown };
+  if (typeof payload.headline !== "string") return "";
+  return toSnippet(payload.headline, FRAGMENT_CHARS);
 }
 
 /* ── HANDLER ────────────────────────────────────────────────────────────────── */
@@ -375,23 +431,31 @@ export async function POST(req: Request) {
   const sources: Source[] = [...statutes, ...judgments];
 
   if (payload.enrich !== false && sources.length > 0) {
-    // Reporter citations are absent from search results, and a wrong citation is the failure
-    // mode that matters most here, so the leading sources are resolved to their real ones.
     const targets = [statutes[0], ...judgments]
       .filter((s): s is Source => Boolean(s))
       .slice(0, CITATION_LOOKUPS);
-    const verbatim = new Set([statutes[0]?.id, judgments[0]?.id].filter(Boolean));
+    const fragmentTargets = new Map<number, string>();
+    if (statutes[0]) fragmentTargets.set(statutes[0].id, queries.statute);
+    if (judgments[0]) fragmentTargets.set(judgments[0].id, queries.search);
 
     await Promise.all(
       targets.map(async (source) => {
-        try {
-          const { citation, fullText } = await fetchDocument(source.id, apiKey);
-          if (citation) source.citation = citation;
-          // Only the governing section and the leading judgment carry their text forward.
-          if (fullText && verbatim.has(source.id)) source.fullText = fullText;
-        } catch {
-          /* the snippet remains this source's grounding */
+        const jobs: Promise<void>[] = [
+          fetchCitation(source.id, apiKey).then((citation) => {
+            if (citation) source.citation = citation;
+          }),
+        ];
+
+        const fragmentQuery = fragmentTargets.get(source.id);
+        if (fragmentQuery) {
+          jobs.push(
+            fetchDocFragment(source.id, fragmentQuery, apiKey).then((fragment) => {
+              if (fragment) source.fullText = fragment;
+            }),
+          );
         }
+
+        await Promise.allSettled(jobs);
       }),
     );
   }
