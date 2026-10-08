@@ -1,4 +1,4 @@
-import { callLLM, extractChunk } from "./client";
+import { callLLM, extractStreamEvent } from "./client";
 import { createAbortError } from "./errors";
 
 function throwIfAborted(signal) {
@@ -12,6 +12,21 @@ export async function streamChatCompletion({ sys, messages, onToken, signal }) {
   const decoder = new TextDecoder();
   let full = "";
   let buffer = "";
+
+  const consumeLine = (line) => {
+    if (!line.startsWith("data:")) return false;
+    const raw = line.slice(5).trimStart().trim();
+    if (!raw) return false;
+    if (raw === "[DONE]") return true;
+    const event = extractStreamEvent(raw);
+    if (event.error) throw new Error(event.error);
+    if (event.chunk) {
+      full += event.chunk;
+      onToken?.(full, event.chunk);
+    }
+    return false;
+  };
+
   while (true) {
     throwIfAborted(signal);
     const { done, value } = await reader.read();
@@ -24,28 +39,14 @@ export async function streamChatCompletion({ sys, messages, onToken, signal }) {
     const lines = buffer.split("\n");
     buffer = lines.pop() ?? "";
     for (const line of lines) {
-      if (!line.startsWith("data: ")) continue;
-      const raw = line.slice(6).trim();
-      if (raw === "[DONE]") continue;
-      const chunk = extractChunk(raw);
-      if (chunk) {
-        full += chunk;
-        onToken?.(full, chunk);
-      }
+      consumeLine(line);
     }
   }
   throwIfAborted(signal);
   buffer += decoder.decode();
   if (buffer.trim()) {
     for (const line of buffer.split("\n")) {
-      if (!line.startsWith("data: ")) continue;
-      const raw = line.slice(6).trim();
-      if (raw === "[DONE]") continue;
-      const chunk = extractChunk(raw);
-      if (chunk) {
-        full += chunk;
-        onToken?.(full, chunk);
-      }
+      consumeLine(line);
     }
   }
   throwIfAborted(signal);

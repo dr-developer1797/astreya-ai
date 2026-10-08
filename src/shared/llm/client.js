@@ -11,6 +11,13 @@ export async function describeFailure(res) {
   let detail = "";
   try {
     const text = await res.text();
+    const contentType = res.headers?.get?.("content-type") || "";
+    const looksLikeHtml = contentType.includes("text/html") || /^\s*<!doctype html|^\s*<html/i.test(text);
+    if (looksLikeHtml) {
+      if (res.status === 504) return "The AI service timed out. Please try again.";
+      if (res.status >= 500) return "The AI service is temporarily unavailable. Please try again.";
+      return `The request failed (API ${res.status}). Please try again.`;
+    }
     try {
       const parsed = JSON.parse(text);
       detail = parsed?.error?.message ?? parsed?.error ?? text;
@@ -51,6 +58,25 @@ export async function callLLM({ sys, messages, stream = true, signal }) {
 export function extractChunk(raw) {
   try { const p = JSON.parse(raw); return p.choices?.[0]?.delta?.content ?? ""; }
   catch { return ""; }
+}
+
+// Parses one data payload from the app's SSE protocol.
+export function extractStreamEvent(raw) {
+  try {
+    const payload = JSON.parse(raw);
+    const error = payload?.error?.message ?? payload?.error;
+    if (typeof error === "string" && error.trim()) {
+      return { chunk: "", error: error.trim() };
+    }
+    return {
+      chunk: typeof payload?.choices?.[0]?.delta?.content === "string"
+        ? payload.choices[0].delta.content
+        : "",
+      error: "",
+    };
+  } catch {
+    return { chunk: "", error: "" };
+  }
 }
 
 // Extracts content from a non-streaming OpenAI-format response object.

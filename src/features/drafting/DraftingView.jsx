@@ -45,6 +45,8 @@ export default function DraftingView() {
   const [checklist, setChecklist]     = useState(() => new Set());
   const [demoStreaming, setDemoStreaming] = useState(false);
   const [demoProgress, setDemoProgress] = useState(0);
+  const [generationError, setGenerationError] = useState("");
+  const [saveWarning, setSaveWarning] = useState("");
   const editorWrap = useRef(null);
 
   const isGenerating = streaming || demoStreaming;
@@ -71,6 +73,8 @@ export default function DraftingView() {
     if (!docType) return;
     setStage("generating");
     reset();
+    setGenerationError("");
+    setSaveWarning("");
     const label  = dtInfo?.label || docType;
     const flist  = fields.map(f=>`${f.label}: ${form[f.key]||"[not provided]"}`).join("\n");
     const notesSection = notes.trim() ? `\n\nADDITIONAL INSTRUCTIONS FROM USER:\n${notes.trim()}` : "";
@@ -107,11 +111,17 @@ export default function DraftingView() {
           content: full,
           createdAt: new Date().toISOString(),
         });
-      } catch { /* storage unavailable */ }
+      } catch (err) {
+        setSaveWarning(
+          err instanceof Error
+            ? `Draft generated, but automatic saving failed: ${err.message}`
+            : "Draft generated, but automatic saving failed.",
+        );
+      }
       scheduleTimeout(() => setStage("editor"), 400);
     } catch (err) {
-      setDocText(`[Error: ${err.message}. Please try again.]`);
-      setStage("editor");
+      setGenerationError(err instanceof Error ? err.message : "Draft generation failed. Please try again.");
+      setStage("intake");
     }
   }, [docType, form, notes, dtInfo, fields, matterId, stream, reset, scheduleTimeout]);
 
@@ -283,6 +293,11 @@ export default function DraftingView() {
           <div style={{padding:"9px 13px",background:C.bgCard,border:`1px solid ${C.border}`,borderLeft:`2px solid ${C.amber}`,borderRadius:"0 6px 6px 0",marginTop:6,marginBottom:18}}>
             <p style={{fontSize:10.5,color:C.textMut,lineHeight:1.6,fontFamily:F.sans}}><span style={{color:C.amber,fontWeight:600}}>Note.</span> Generated drafts are starting points. Have a qualified advocate review before execution. State stamp duty obligations may apply.</p>
           </div>
+          {generationError && (
+            <div role="alert" style={{padding:"9px 13px",background:C.redFaint,border:`1px solid ${C.redGlow}`,borderRadius:6,marginBottom:14,fontSize:11,color:C.red,fontFamily:F.sans,lineHeight:1.55}}>
+              Could not generate the draft: {generationError}
+            </div>
+          )}
           <Btn primary onClick={generate} style={{padding:"10px 22px",fontSize:12.5}}>✦ Generate {dtInfo?.label} →</Btn>
         </div>
       </div>
@@ -372,6 +387,11 @@ export default function DraftingView() {
       <div style={{flex:1,display:"flex",overflow:"hidden"}}>
         {/* editor canvas */}
         <div ref={editorWrap} style={{flex:1,overflowY:"auto",padding:"28px 36px",position:"relative"}} onMouseUp={handleSelect}>
+          {saveWarning && (
+            <div role="alert" style={{marginBottom:12,padding:"9px 13px",background:`${C.amber}0E`,border:`1px solid ${C.amber}33`,borderRadius:6,fontSize:11,color:C.amber,fontFamily:F.sans,lineHeight:1.55}}>
+              {saveWarning} Copy or export this draft before leaving the page.
+            </div>
+          )}
           <div style={{marginBottom:16,padding:"8px 13px",background:`${C.blue}0E`,border:`1px solid ${C.blue}28`,borderRadius:6,display:"flex",alignItems:"center",gap:8}}>
             <span style={{fontSize:12}}>✦</span>
             <span style={{fontSize:11,color:C.textSec,fontFamily:F.sans}}>Select any clause or sentence to get AI risk analysis and a suggested rewrite.</span>

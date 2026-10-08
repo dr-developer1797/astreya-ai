@@ -12,6 +12,8 @@ import { countWords } from "@/shared/utils/text";
 import { useAbortController } from "@/shared/hooks/useAbortController";
 import { useTimeoutCleanup } from "@/shared/hooks/useTimeoutCleanup";
 
+const MAX_CONTRACT_CHARS = 100_000;
+
 export default function RiskReviewView() {
   const { getSignal, getGeneration, isStaleGeneration } = useAbortController();
   const { scheduleTimeout, scheduleInterval, clearScheduled } = useTimeoutCleanup();
@@ -25,6 +27,7 @@ export default function RiskReviewView() {
   const [activeRisk, setActiveRisk]     = useState(null);
   const [filterLevel, setFilterLevel]   = useState("ALL");
   const [exportModal, setExportModal]   = useState(false);
+  const [inputError, setInputError]     = useState("");
   const fileRef = useRef(null);
 
   /* ── RUN ANALYSIS ── */
@@ -110,11 +113,24 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
 
   const handleAnalyse = () => {
     const txt = contractText.trim();
-    if (txt.length < 100) return;
+    if (txt.length < 100) {
+      setInputError("Enter at least 100 characters before running the analysis.");
+      return;
+    }
+    if (txt.length > MAX_CONTRACT_CHARS) {
+      setInputError(`Contract is too long. Limit the input to ${MAX_CONTRACT_CHARS.toLocaleString()} characters.`);
+      return;
+    }
+    setInputError("");
     runAnalysis(txt, contractType, perspective);
   };
 
-  const loadSample = () => setContractText(SAMPLE_CONTRACT);
+  const loadSample = () => {
+    setContractText(SAMPLE_CONTRACT);
+    setInputError("");
+  };
+  const contractLength = contractText.trim().length;
+  const contractTooLong = contractLength > MAX_CONTRACT_CHARS;
 
   const filteredRisks = results?.risks?.filter(r => filterLevel === "ALL" || r.risk_level === filterLevel) || [];
   const displayRisk = activeRisk && filteredRisks.some(r => r.id === activeRisk.id)
@@ -169,15 +185,23 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
           {/* text area */}
           <div style={{position:"relative",marginBottom:16}}>
             <textarea
-              value={contractText} onChange={e=>setContractText(e.target.value)}
+              value={contractText} onChange={e=>{
+                const value = e.target.value;
+                setContractText(value);
+                setInputError(value.trim().length > MAX_CONTRACT_CHARS
+                  ? `Contract is too long. Limit the input to ${MAX_CONTRACT_CHARS.toLocaleString()} characters.`
+                  : "");
+              }}
+              aria-invalid={contractTooLong || Boolean(inputError)}
+              aria-describedby={inputError ? "contract-input-error" : undefined}
               placeholder={"Paste your contract here…\n\nSupports: NDA, Employment, Service, SPA, Lease, MOU, Legal Notices and more.\nMinimum 100 characters required for analysis."}
               style={{width:"100%",minHeight:320,background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:9,padding:"16px 18px",color:C.textPri,fontSize:12.5,fontFamily:F.sans,fontWeight:300,outline:"none",resize:"vertical",lineHeight:1.8}}
               onFocus={e=>e.target.style.borderColor=C.borderMid}
               onBlur={e=>e.target.style.borderColor=C.border}
             />
             {contractText && (
-              <div style={{position:"absolute",bottom:12,right:14,fontSize:10,color:C.textMut,fontFamily:F.sans}}>
-                {countWords(contractText.trim())} words
+              <div style={{position:"absolute",bottom:12,right:14,fontSize:10,color:contractTooLong?C.red:C.textMut,fontFamily:F.sans}}>
+                {countWords(contractText.trim())} words · {contractLength.toLocaleString()} / {MAX_CONTRACT_CHARS.toLocaleString()} characters
               </div>
             )}
           </div>
@@ -197,19 +221,30 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
             <div style={{fontSize:10,color:C.textMut,marginTop:3,fontFamily:F.sans}}>PDF parsing coming soon</div>
             <input ref={fileRef} type="file" accept=".txt,.md" style={{display:"none"}} onChange={e=>{
               const f=e.target.files?.[0]; if(!f)return;
-              const r=new FileReader(); r.onload=ev=>setContractText(ev.target?.result||""); r.readAsText(f);
+              const r=new FileReader(); r.onload=ev=>{
+                const value = typeof ev.target?.result === "string" ? ev.target.result : "";
+                setContractText(value);
+                setInputError(value.trim().length > MAX_CONTRACT_CHARS
+                  ? `This file is too long. Limit the input to ${MAX_CONTRACT_CHARS.toLocaleString()} characters.`
+                  : "");
+              }; r.readAsText(f);
             }}/>
           </div>
 
+          {inputError && (
+            <div id="contract-input-error" role="alert" style={{padding:"9px 13px",background:C.redFaint,border:`1px solid ${C.redGlow}`,borderRadius:6,marginBottom:14,fontSize:11,color:C.red,fontFamily:F.sans,lineHeight:1.55}}>
+              {inputError}
+            </div>
+          )}
           <div style={{display:"flex",alignItems:"center",gap:10}}>
-            <button onClick={handleAnalyse} disabled={contractText.trim().length < 100}
-              style={{padding:"11px 28px",background:contractText.trim().length>=100?C.red:"#2A1A1E",border:"none",borderRadius:7,color:contractText.trim().length>=100?"#fff":C.textMut,fontSize:13,fontWeight:500,cursor:contractText.trim().length>=100?"pointer":"not-allowed",fontFamily:F.sans,letterSpacing:"0.04em",transition:"all 0.15s"}}
-              onMouseEnter={e=>{if(contractText.trim().length>=100)e.currentTarget.style.background="#B51D30";}}
-              onMouseLeave={e=>{if(contractText.trim().length>=100)e.currentTarget.style.background=C.red;}}>
+            <button onClick={handleAnalyse} disabled={contractLength < 100 || contractTooLong}
+              style={{padding:"11px 28px",background:contractLength>=100&&!contractTooLong?C.red:"#2A1A1E",border:"none",borderRadius:7,color:contractLength>=100&&!contractTooLong?"#fff":C.textMut,fontSize:13,fontWeight:500,cursor:contractLength>=100&&!contractTooLong?"pointer":"not-allowed",fontFamily:F.sans,letterSpacing:"0.04em",transition:"all 0.15s"}}
+              onMouseEnter={e=>{if(contractLength>=100&&!contractTooLong)e.currentTarget.style.background="#B51D30";}}
+              onMouseLeave={e=>{if(contractLength>=100&&!contractTooLong)e.currentTarget.style.background=C.red;}}>
               ⚑ Run Risk Analysis
             </button>
-            {contractText.trim().length > 0 && contractText.trim().length < 100 && (
-              <span style={{fontSize:11,color:C.amber,fontFamily:F.sans}}>{100 - contractText.trim().length} more characters needed</span>
+            {contractLength > 0 && contractLength < 100 && (
+              <span style={{fontSize:11,color:C.amber,fontFamily:F.sans}}>{100 - contractLength} more characters needed</span>
             )}
           </div>
         </div>

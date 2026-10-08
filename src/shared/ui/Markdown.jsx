@@ -134,7 +134,7 @@ function renderReportLine(line, i, { bulletColor = C.red } = {}) {
       </div>
     );
   }
-  if (/^\d+\./.test(line)) {
+  if (/^\d+\.\s+/.test(line)) {
     return (
       <div key={i} style={{ display: "flex", gap: 8, marginBottom: 5 }}>
         <span style={{ color: bulletColor, fontSize: 10, fontFamily: "monospace", minWidth: 20, marginTop: 3, flexShrink: 0 }}>{line.match(/^\d+/)[0]}.</span>

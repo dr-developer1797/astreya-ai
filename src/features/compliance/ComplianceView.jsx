@@ -18,6 +18,7 @@ export default function ComplianceView() {
   const [stage, setStage]       = useState("form");
   const [form, setF, setForm]   = useFormState({sectors:[]});
   const [exportModal, setExportModal] = useState(false);
+  const [generationError, setGenerationError] = useState("");
   const scrollRef               = useRef(null);
 
   useEffect(()=>{ if(scrollRef.current) scrollRef.current.scrollTop=scrollRef.current.scrollHeight; },[report]);
@@ -32,6 +33,7 @@ export default function ComplianceView() {
   const generate = useCallback(async ()=>{
     if(!form.state||!form.entity_type)return;
     reset();
+    setGenerationError("");
     setStage("generating");
 
     const sys=`You are a senior Indian compliance lawyer and CA with expertise in all central and state regulations. Generate a comprehensive, actionable Compliance Checklist using EXACT Markdown structure:
@@ -69,8 +71,9 @@ Special Notes: ${form.notes||"None"}`;
         return;
       }
       scheduleTimeout(() => setStage("results"), 350);
-    } catch {
-      setStage("results");
+    } catch (err) {
+      setGenerationError(err instanceof Error ? err.message : "Checklist generation failed. Please try again.");
+      setStage("form");
     }
   },[form, stream, reset, scheduleTimeout]);
 
@@ -125,6 +128,11 @@ Special Notes: ${form.notes||"None"}`;
             <label style={{display:"block",fontSize:11,color:C.textSec,fontFamily:F.sans,marginBottom:6}}>Additional Notes</label>
             <Field field={{ key: "notes", type: "textarea", ph: "e.g. Recently crossed ₹5Cr turnover, planning to hire contract workers, considering IPO in 2027…", rows: 72 }} value={form.notes} onChange={setF} />
           </div>
+          {generationError && (
+            <div role="alert" style={{padding:"9px 13px",background:C.redFaint,border:`1px solid ${C.redGlow}`,borderRadius:6,marginBottom:14,fontSize:11,color:C.red,fontFamily:F.sans,lineHeight:1.55}}>
+              Could not generate the compliance checklist: {generationError}
+            </div>
+          )}
           <Btn primary onClick={generate} disabled={!canGenerate}>
             ✦ Generate Compliance Checklist
           </Btn>

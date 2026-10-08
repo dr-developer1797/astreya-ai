@@ -18,6 +18,7 @@ export default function LitigationView() {
   const [stage, setStage]       = useState("form");
   const [form, setF]            = useFormState({});
   const [exportModal, setExportModal] = useState(false);
+  const [generationError, setGenerationError] = useState("");
   const scrollRef               = useRef(null);
 
   useEffect(()=>{
@@ -31,6 +32,7 @@ export default function LitigationView() {
   const generate = useCallback(async () => {
     if (!form.facts?.trim() || form.facts.trim().length < 40) return;
     reset();
+    setGenerationError("");
     setStage("generating");
     const sys = `You are a senior Indian litigator with 25 years of courtroom experience. Produce a detailed Litigation Strategy Report using this EXACT structure (use Markdown headings and bullets):
 
@@ -68,8 +70,9 @@ NOTES: ${form.notes||"None"}`;
         return;
       }
       scheduleTimeout(() => setStage("results"), 350);
-    } catch {
-      setStage("results");
+    } catch (err) {
+      setGenerationError(err instanceof Error ? err.message : "Strategy generation failed. Please try again.");
+      setStage("form");
     }
   }, [form, stream, reset, scheduleTimeout]);
 
@@ -108,6 +111,11 @@ NOTES: ${form.notes||"None"}`;
           <div style={{padding:"9px 13px",background:C.bgCard,border:`1px solid ${C.border}`,borderLeft:`2px solid ${C.amber}`,borderRadius:"0 6px 6px 0",marginBottom:18}}>
             <p style={{fontSize:10.5,color:C.textMut,lineHeight:1.6,fontFamily:F.sans}}><span style={{color:C.amber,fontWeight:600}}>Note.</span> Strategy reports are AI-generated preliminary analysis. Verify all citations and consult a qualified advocate before filing.</p>
           </div>
+          {generationError && (
+            <div role="alert" style={{padding:"9px 13px",background:C.redFaint,border:`1px solid ${C.redGlow}`,borderRadius:6,marginBottom:14,fontSize:11,color:C.red,fontFamily:F.sans,lineHeight:1.55}}>
+              Could not generate the strategy report: {generationError}
+            </div>
+          )}
           <Btn primary onClick={generate} disabled={!form.facts?.trim()||form.facts.trim().length<40}>
             ⚖ Generate Strategy Report
           </Btn>

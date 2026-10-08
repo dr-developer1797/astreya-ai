@@ -47,6 +47,12 @@ type Source = {
   fullText?: string;
 };
 
+export function normalizePage(raw: unknown): number {
+  return typeof raw === "number" && Number.isFinite(raw)
+    ? Math.max(0, Math.floor(raw))
+    : 0;
+}
+
 /* ── QUERY NORMALISATION ───────────────────────────────────────────────────────
    A verbatim question ("Can FIR be quashed under S.482 CrPC?") ranks badly: the
    interrogative words pull in unrelated judgments and the abbreviation never matches the
@@ -363,15 +369,19 @@ export async function POST(req: Request) {
   if (blocked) return blocked;
 
   const started = Date.now();
-  let payload: { query?: string; page?: number; enrich?: boolean };
+  let rawPayload: unknown;
 
   try {
-    payload = await req.json();
+    rawPayload = await req.json();
   } catch {
     return Response.json({ error: "Invalid JSON body." }, { status: 400 });
   }
 
-  const query = payload.query?.trim();
+  const payload =
+    rawPayload && typeof rawPayload === "object"
+      ? (rawPayload as Record<string, unknown>)
+      : {};
+  const query = typeof payload.query === "string" ? payload.query.trim() : "";
   if (!query) {
     return Response.json({ error: "A search query is required." }, { status: 400 });
   }
@@ -387,7 +397,7 @@ export async function POST(req: Request) {
   }
 
   const queries = normalizeQuery(query);
-  const page = Math.max(0, Math.floor(payload.page || 0));
+  const page = normalizePage(payload.page);
   const settled = await Promise.allSettled(
     TIERS.map((tier) => searchTier(queries, tier, page, apiKey)),
   );

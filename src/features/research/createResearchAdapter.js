@@ -1,4 +1,4 @@
-import { callLLM, extractChunk } from "@/shared/llm/client";
+import { callLLM, extractStreamEvent } from "@/shared/llm/client";
 import { createAbortError, isAbortError } from "@/shared/llm/errors";
 import { RESEARCH_SYSTEM } from "@/features/research/prompts";
 
@@ -125,6 +125,8 @@ export function createResearchAdapter({ getHandlers, getDemoText }) {
           grounded: false,
           error: `IndianKanoon unavailable (${err.message}) — answering without retrieved authority.`,
         });
+      } finally {
+        handlers.onIkDone?.();
       }
 
       if (abortSignal?.aborted) throw createAbortError();
@@ -146,6 +148,15 @@ export function createResearchAdapter({ getHandlers, getDemoText }) {
       let full = "";
       let buffer = "";
 
+      const consumeLine = (line) => {
+        if (!line.startsWith("data:")) return;
+        const raw = line.slice(5).trimStart().trim();
+        if (!raw || raw === "[DONE]") return;
+        const event = extractStreamEvent(raw);
+        if (event.error) throw new Error(event.error);
+        if (event.chunk) full += event.chunk;
+      };
+
       try {
         while (true) {
           if (abortSignal?.aborted) {
@@ -158,12 +169,9 @@ export function createResearchAdapter({ getHandlers, getDemoText }) {
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
           for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const raw = line.slice(6).trim();
-            if (raw === "[DONE]") continue;
-            const chunk = extractChunk(raw);
-            if (chunk) {
-              full += chunk;
+            const before = full.length;
+            consumeLine(line);
+            if (full.length > before) {
               yield { content: [{ type: "text", text: full }] };
             }
           }
@@ -171,12 +179,9 @@ export function createResearchAdapter({ getHandlers, getDemoText }) {
         buffer += decoder.decode();
         if (buffer.trim()) {
           for (const line of buffer.split("\n")) {
-            if (!line.startsWith("data: ")) continue;
-            const raw = line.slice(6).trim();
-            if (raw === "[DONE]") continue;
-            const chunk = extractChunk(raw);
-            if (chunk) {
-              full += chunk;
+            const before = full.length;
+            consumeLine(line);
+            if (full.length > before) {
               yield { content: [{ type: "text", text: full }] };
             }
           }

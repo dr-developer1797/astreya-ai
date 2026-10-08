@@ -58,6 +58,8 @@ function ResearchShell() {
         setIkSources(sources);
         setIkGrounded(grounded);
         setIkError(error || "");
+      },
+      onIkDone() {
         setIkLoading(false);
       },
       onDemoStart() {

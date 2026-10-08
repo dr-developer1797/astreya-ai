@@ -56,7 +56,7 @@ describe("POST /api/chat", () => {
       "fetch",
       vi.fn(async () =>
         new Response(
-          `data: ${JSON.stringify({ choices: [{ delta: { content: "Hi" } }] })}\n\ndata: [DONE]\n\n`,
+          `data: ${JSON.stringify({ event_type: "step.delta", delta: { type: "text", text: "Hi" } })}\n\ndata: [DONE]\n\n`,
           {
             status: 200,
             headers: { "Content-Type": "text/event-stream" },
@@ -77,7 +77,40 @@ describe("POST /api/chat", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toContain("text/event-stream");
     const text = await res.text();
-    expect(text).toContain("data:");
+    expect(text).toContain('"content":"Hi"');
+    expect(text).toContain("data: [DONE]");
+  });
+
+  it("emits upstream stream failures as an SSE error event, not model text", async () => {
+    process.env.GEMINI_API_KEY = "test-key";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(
+          `data: ${JSON.stringify({ event_type: "error", error: { message: "quota exceeded" } })}\n\n`,
+          {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          },
+        ),
+      ),
+    );
+
+    const req = new Request("http://localhost/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "user", content: "hello" }],
+        stream: true,
+      }),
+    });
+    const res = await POST(req);
+    const text = await res.text();
+
+    expect(text).toContain("event: error");
+    expect(text).toContain('"error":"quota exceeded"');
+    expect(text).not.toContain('"content"');
+    expect(text).not.toContain("[DONE]");
   });
 
   it("returns 401 when ASTREYA_API_KEY is set and request is unauthorized", async () => {

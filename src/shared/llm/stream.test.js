@@ -3,18 +3,21 @@ import { streamChatCompletion } from "./stream";
 import { isAbortError } from "./errors";
 
 const callLLM = vi.fn();
-const extractChunk = vi.fn((raw) => {
+const extractStreamEvent = vi.fn((raw) => {
   try {
     const p = JSON.parse(raw);
-    return p.choices?.[0]?.delta?.content ?? "";
+    return {
+      chunk: p.choices?.[0]?.delta?.content ?? "",
+      error: typeof p.error === "string" ? p.error : "",
+    };
   } catch {
-    return "";
+    return { chunk: "", error: "" };
   }
 });
 
 vi.mock("./client", () => ({
   callLLM: (...args) => callLLM(...args),
-  extractChunk: (raw) => extractChunk(raw),
+  extractStreamEvent: (raw) => extractStreamEvent(raw),
 }));
 
 function sseBody(chunks) {
@@ -39,7 +42,7 @@ function sseBody(chunks) {
 describe("streamChatCompletion", () => {
   beforeEach(() => {
     callLLM.mockReset();
-    extractChunk.mockClear();
+    extractStreamEvent.mockClear();
   });
 
   it("returns full text on clean completion", async () => {
@@ -81,5 +84,23 @@ describe("streamChatCompletion", () => {
         signal: controller.signal,
       }),
     ).rejects.toSatisfy(isAbortError);
+  });
+
+  it("throws when the server sends an SSE error payload", async () => {
+    const encoder = new TextEncoder();
+    callLLM.mockResolvedValue({
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode('event: error\ndata: {"error":"quota exceeded"}\n\n'));
+          controller.close();
+        },
+      }),
+    });
+
+    await expect(
+      streamChatCompletion({
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    ).rejects.toThrow("quota exceeded");
   });
 });

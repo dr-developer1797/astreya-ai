@@ -26,10 +26,9 @@ export function toWordDoc(text, title = "Document") {
         if(!inUl){out+="<ul>";inUl=true;}
         out+=`<li>${inline(t.replace(/^[-•]\s*/,""))}</li>`; continue;
       }
-      if (/^\d+\./.test(t)){
-        if(inUl){out+="</ul>";inUl=false;}
-        if(!inOl){out+="<ol>";inOl=true;}
-        out+=`<li>${inline(t.replace(/^\d+\.\s*/,""))}</li>`; continue;
+      if (/^\d+\.\s+/.test(t)){
+        closeList();
+        out+=`<p class="numbered">${inline(t)}</p>`; continue;
       }
       if (t.startsWith("⚠")) { closeList(); out+=`<p class="disclaimer">${inline(t)}</p>`; continue; }
       if (/^---+$/.test(t))   { closeList(); out+="<hr>"; continue; }
@@ -68,6 +67,7 @@ export function toWordDoc(text, title = "Document") {
   hr    { border:none; border-top:1pt solid #DDD; margin:12pt 0; }
   .meta { font-size:9pt; color:#888; margin-bottom:14pt; }
   .check{ margin:3pt 0; font-size:11pt; }
+  .numbered { margin:3pt 0 3pt 16pt; text-indent:-16pt; }
   .em   { font-size:13pt; }
   .disclaimer { background:#FFF8E7; border-left:3pt solid #F0A844; padding:7pt 10pt; margin:14pt 0 4pt; font-size:10pt; color:#7A6020; mso-border-left-alt:solid #F0A844 2.25pt; }
   .footer{ margin-top:22pt; padding-top:8pt; border-top:1pt solid #EEE; font-size:8.5pt; color:#AAA; mso-border-top-alt:solid #EEE .5pt; }

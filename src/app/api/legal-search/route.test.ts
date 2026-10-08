@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { POST, normalizeQuery } from "./route";
+import { POST, normalizePage, normalizeQuery } from "./route";
 
 const originalIkKey = process.env.INDIAN_KANOON_API_KEY;
 const originalAstreyaKey = process.env.ASTREYA_API_KEY;
@@ -16,6 +16,16 @@ describe("normalizeQuery", () => {
     const result = normalizeQuery("cheque bounce procedure");
     expect(result.search.length).toBeGreaterThan(0);
     expect(result.search.toLowerCase()).toContain("cheque");
+  });
+});
+
+describe("normalizePage", () => {
+  it("uses a safe page for invalid values", () => {
+    expect(normalizePage(Number.NaN)).toBe(0);
+    expect(normalizePage(Number.POSITIVE_INFINITY)).toBe(0);
+    expect(normalizePage("2")).toBe(0);
+    expect(normalizePage(-3)).toBe(0);
+    expect(normalizePage(2.9)).toBe(2);
   });
 });
 
@@ -45,6 +55,16 @@ describe("POST /api/legal-search", () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 when query is not a string", async () => {
+    const req = new Request("http://localhost/api/legal-search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: { text: "bail" } }),
     });
     const res = await POST(req);
     expect(res.status).toBe(400);

@@ -5,6 +5,7 @@ import {
   ActionBarPrimitive,
   AuiIf,
   ComposerPrimitive,
+  ErrorPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
   useAui,
@@ -94,6 +95,23 @@ function AssistantMessage({ ikLoading }) {
           </AuiIf>
           <div style={{ fontFamily: F.sans }}>
             <MessagePrimitive.Parts components={{ Text: ResearchMarkdown }} />
+            <MessagePrimitive.Error>
+              <ErrorPrimitive.Root
+                role="alert"
+                style={{
+                  marginTop: 10,
+                  padding: "10px 12px",
+                  border: `1px solid ${C.redGlow}`,
+                  borderRadius: 6,
+                  background: C.redFaint,
+                  color: C.red,
+                  fontSize: 11,
+                  lineHeight: 1.55,
+                }}
+              >
+                Research failed: <ErrorPrimitive.Message />
+              </ErrorPrimitive.Root>
+            </MessagePrimitive.Error>
           </div>
           <ActionBarPrimitive.Root
             hideWhenRunning

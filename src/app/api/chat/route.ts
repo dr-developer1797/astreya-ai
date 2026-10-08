@@ -78,18 +78,22 @@ function openAIChunk(text: string): string {
   return `data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`;
 }
 
+function errorChunk(message: string): string {
+  return `event: error\ndata: ${JSON.stringify({ error: message })}\n\n`;
+}
+
 function emitEvent(
   event: string,
   controller: TransformStreamDefaultController<Uint8Array>,
   encoder: TextEncoder,
-) {
+): boolean {
   const data = event
     .split(/\r?\n/)
     .filter((line) => line.startsWith("data:"))
     .map((line) => line.slice(5).trimStart())
     .join("\n");
 
-  if (!data || data === "[DONE]") return;
+  if (!data || data === "[DONE]") return false;
 
   let parsed: {
     event_type?: string;
@@ -100,16 +104,18 @@ function emitEvent(
   try {
     parsed = JSON.parse(data);
   } catch {
-    return; // Keepalive or comment frame.
+    return false; // Keepalive or comment frame.
   }
 
   if (parsed.event_type === "step.delta" && parsed.delta?.type === "text" && parsed.delta.text) {
     controller.enqueue(encoder.encode(openAIChunk(parsed.delta.text)));
   } else if (parsed.event_type === "error") {
     controller.enqueue(
-      encoder.encode(openAIChunk(`\n\n⚠ ${parsed.error?.message || "Gemma stream failed"}`)),
+      encoder.encode(errorChunk(parsed.error?.message || "Gemma stream failed")),
     );
+    return true;
   }
+  return false;
 }
 
 // Rewrites Google's interaction SSE events into the OpenAI-style chunks the client reads.
@@ -117,6 +123,7 @@ function toOpenAIStream(upstream: ReadableStream<Uint8Array>): ReadableStream<Ui
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
   let buffer = "";
+  let streamFailed = false;
 
   return upstream.pipeThrough(
     new TransformStream<Uint8Array, Uint8Array>({
@@ -124,12 +131,16 @@ function toOpenAIStream(upstream: ReadableStream<Uint8Array>): ReadableStream<Ui
         buffer += decoder.decode(chunk, { stream: true });
         const events = buffer.split(/\r?\n\r?\n/);
         buffer = events.pop() ?? "";
-        for (const event of events) emitEvent(event, controller, encoder);
+        for (const event of events) {
+          if (!streamFailed) streamFailed = emitEvent(event, controller, encoder);
+        }
       },
       flush(controller) {
         buffer += decoder.decode();
-        if (buffer.trim()) emitEvent(buffer, controller, encoder);
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+        if (buffer.trim() && !streamFailed) {
+          streamFailed = emitEvent(buffer, controller, encoder);
+        }
+        if (!streamFailed) controller.enqueue(encoder.encode("data: [DONE]\n\n"));
       },
     }),
   );
