@@ -10,6 +10,8 @@ import ReminderCard from "@/shared/ui/ReminderCard";
 import ViewHeader from "@/shared/ui/ViewHeader";
 import ExportModal from "@/shared/modals/ExportModal";
 import { callLLM, extractResponse } from "@/shared/llm/client";
+import { isDraftIncomplete } from "@/shared/llm/completeness";
+import { isAbortError } from "@/shared/llm/errors";
 import { useLLMStream } from "@/shared/hooks/useLLMStream";
 import { DOC_TYPES, INTAKE } from "@/shared/constants/documents";
 import { DEMO_DRAFT } from "@/features/drafting/demo";
@@ -47,11 +49,49 @@ export default function DraftingView() {
   const [demoProgress, setDemoProgress] = useState(0);
   const [generationError, setGenerationError] = useState("");
   const [saveWarning, setSaveWarning] = useState("");
+  const [incomplete, setIncomplete] = useState(false);
+  const [createdAt, setCreatedAt] = useState(null);
+  const [continuing, setContinuing] = useState(false);
   const editorWrap = useRef(null);
+  const clausePanelRef = useRef(null);
+  const clauseAbortRef = useRef(null);
+  const clauseReqRef = useRef(0);
 
-  const isGenerating = streaming || demoStreaming;
-  const generatingText = streaming ? streamPreview : docText;
+  const isGenerating = streaming || demoStreaming || continuing;
+  const generatingText = streaming || continuing ? streamPreview : docText;
   const generatingProgress = demoStreaming ? demoProgress : progress;
+
+  const dtInfo  = DOC_TYPES.find(d=>d.id===docType);
+  // Memoised so the identity stays stable across renders; generate() depends on it.
+  const fields  = useMemo(() => (docType ? (INTAKE[docType] || INTAKE.nda) : []), [docType]);
+  const filled  = fields.filter(f=>form[f.key]?.trim()).length;
+  const pct     = fields.length ? Math.round((filled/fields.length)*100) : 0;
+
+  const persistDraft = useCallback(async (content) => {
+    try {
+      const stamp = createdAt || new Date().toISOString();
+      if (!createdAt) setCreatedAt(stamp);
+      await saveDraft({
+        typeId: docType,
+        typeLabel: dtInfo?.label || docType,
+        typeIcon: dtInfo?.icon || "📝",
+        typeShort: dtInfo?.short || "Doc",
+        category: dtInfo?.category || "General",
+        matterId,
+        form: { ...form },
+        notes,
+        content,
+        createdAt: stamp,
+      });
+      setSaveWarning("");
+    } catch (err) {
+      setSaveWarning(
+        err instanceof Error
+          ? `Draft generated, but automatic saving failed: ${err.message}`
+          : "Draft generated, but automatic saving failed.",
+      );
+    }
+  }, [createdAt, docType, dtInfo, matterId, form, notes]);
 
   const toggleChecklist = (item) => {
     setChecklist((prev) => {
@@ -62,12 +102,6 @@ export default function DraftingView() {
     });
   };
 
-  const dtInfo  = DOC_TYPES.find(d=>d.id===docType);
-  // Memoised so the identity stays stable across renders; generate() depends on it.
-  const fields  = useMemo(() => (docType ? (INTAKE[docType] || INTAKE.nda) : []), [docType]);
-  const filled  = fields.filter(f=>form[f.key]?.trim()).length;
-  const pct     = fields.length ? Math.round((filled/fields.length)*100) : 0;
-
   /* ── GENERATE ── */
   const generate = useCallback(async () => {
     if (!docType) return;
@@ -75,55 +109,67 @@ export default function DraftingView() {
     reset();
     setGenerationError("");
     setSaveWarning("");
+    setIncomplete(false);
+    setCreatedAt(null);
     const label  = dtInfo?.label || docType;
     const flist  = fields.map(f=>`${f.label}: ${form[f.key]||"[not provided]"}`).join("\n");
     const notesSection = notes.trim() ? `\n\nADDITIONAL INSTRUCTIONS FROM USER:\n${notes.trim()}` : "";
-    // Markdown is banned because the editor renders this text verbatim, so asterisks and
-    // hashes would show up literally. Keep this prompt terse: the model emits a hidden
-    // thought step that is billed against the same MAX_TOKENS budget as the document, and
-    // measurements show elaborate prompts (word caps, clause inventories, "do not
-    // deliberate" directives) all make it deliberate longer and finish less often. A short
-    // instruction plus a short target document is what actually reaches the signature block.
-    const sys = `Draft a complete, execution-ready ${label} under Indian law. Plain text only — no markdown, no asterisks, no hash headings. Numbered clauses, one short paragraph each. Always reach the signature block for both parties. Output only the document.`;
     const usr = `Draft a complete ${label} using these details:\n\n${flist}${notesSection}`;
     try {
       const full = await stream({
-        sys,
+        feature: "draft",
+        featureOpts: { docLabel: label },
         messages: [{ role: "user", content: usr }],
-        charBudget: 3200,
       });
       if (!full) {
         setStage("intake");
         return;
       }
+      const cutOff = isDraftIncomplete(full);
       setDocText(full);
       setWordCount(countWords(full));
-      try {
-        await saveDraft({
-          typeId: docType,
-          typeLabel: dtInfo?.label || docType,
-          typeIcon: dtInfo?.icon || "📝",
-          typeShort: dtInfo?.short || "Doc",
-          category: dtInfo?.category || "General",
-          matterId,
-          form: { ...form },
-          notes,
-          content: full,
-          createdAt: new Date().toISOString(),
-        });
-      } catch (err) {
-        setSaveWarning(
-          err instanceof Error
-            ? `Draft generated, but automatic saving failed: ${err.message}`
-            : "Draft generated, but automatic saving failed.",
-        );
-      }
+      setIncomplete(cutOff);
+      await persistDraft(full);
       scheduleTimeout(() => setStage("editor"), 400);
     } catch (err) {
       setGenerationError(err instanceof Error ? err.message : "Draft generation failed. Please try again.");
       setStage("intake");
     }
-  }, [docType, form, notes, dtInfo, fields, matterId, stream, reset, scheduleTimeout]);
+  }, [docType, form, notes, dtInfo, fields, stream, reset, scheduleTimeout, persistDraft]);
+
+  const continueDraft = useCallback(async () => {
+    if (!docType || !docText.trim() || isGenerating) return;
+    setContinuing(true);
+    setGenerationError("");
+    try {
+      const label = dtInfo?.label || docType;
+      const continuation = await stream({
+        feature: "draft_continue",
+        featureOpts: { docLabel: label },
+        messages: [
+          {
+            role: "user",
+            content: `The draft so far is incomplete. Continue from the end without repeating earlier clauses:\n\n${docText}`,
+          },
+        ],
+      });
+      if (!continuation) return;
+      const merged = `${docText.trimEnd()}\n\n${continuation.trimStart()}`;
+      const cutOff = isDraftIncomplete(merged);
+      setDocText(merged);
+      setWordCount(countWords(merged));
+      setIncomplete(cutOff);
+      await persistDraft(merged);
+    } catch (err) {
+      setSaveWarning(
+        err instanceof Error
+          ? `Could not continue the draft: ${err.message}`
+          : "Could not continue the draft. Please try again.",
+      );
+    } finally {
+      setContinuing(false);
+    }
+  }, [docType, docText, isGenerating, dtInfo, stream, persistDraft]);
 
   /* ── DEMO ── */
   // Replays a canned NDA through the real generating → editor flow so the app can be
@@ -135,6 +181,8 @@ export default function DraftingView() {
     setForm({ ...DEMO_DRAFT.form });
     setNotes(DEMO_DRAFT.notes);
     setDocText(""); setDemoProgress(0); setWordCount(0);
+    setIncomplete(false);
+    setCreatedAt(new Date().toISOString());
     setStage("generating"); setDemoStreaming(true);
 
     const chunk = Math.max(4, Math.ceil(text.length / 700));
@@ -144,6 +192,7 @@ export default function DraftingView() {
         setDemoProgress(100);
         setWordCount(countWords(text));
         setDocText(text);
+        setIncomplete(isDraftIncomplete(text));
         scheduleTimeout(() => { setStage("editor"); setDemoStreaming(false); }, 400);
         return;
       }
@@ -157,21 +206,38 @@ export default function DraftingView() {
 
   /* ── CLAUSE ANALYSE ── */
   const analyseClause = useCallback(async (text) => {
-    setClauseAI(""); setClauseLoad(true);
+    clauseAbortRef.current?.abort();
+    const controller = new AbortController();
+    clauseAbortRef.current = controller;
+    const reqId = ++clauseReqRef.current;
+    setClauseAI("");
+    setClauseLoad(true);
     try {
       const res = await callLLM({
-        messages:[{role:"user",content:`You are a senior Indian contracts lawyer. Analyse this clause:\n\n"${text}"\n\nRespond in exactly this format:\nRISK: [CRITICAL/HIGH/MEDIUM/LOW] — [one-line reason]\nISSUE: [1-2 sentences on the legal concern under Indian law]\nREVISION: [Improved clause text]\n\nNo other text.`}],
-        stream:false,
+        feature: "clause",
+        messages: [{ role: "user", content: text }],
+        stream: false,
+        signal: controller.signal,
       });
+      if (reqId !== clauseReqRef.current) return;
       const d = await res.json();
+      if (reqId !== clauseReqRef.current) return;
       setClauseAI(extractResponse(d) || "No analysis available.");
-    } catch { setClauseAI("Error analysing clause."); }
-    setClauseLoad(false);
+    } catch (err) {
+      if (isAbortError(err) || reqId !== clauseReqRef.current) return;
+      setClauseAI("Error analysing clause.");
+    } finally {
+      if (reqId === clauseReqRef.current) setClauseLoad(false);
+    }
   }, []);
 
-  const handleSelect = () => {
+  const handleSelect = (e) => {
+    if (clausePanelRef.current?.contains(e.target)) return;
     const sel = window.getSelection();
-    if (!sel||sel.isCollapsed||sel.toString().trim().length<20) { setClausePanel(null); return; }
+    if (!sel || sel.isCollapsed || sel.toString().trim().length < 20) {
+      setClausePanel(null);
+      return;
+    }
     const text = sel.toString().trim();
     const rect = sel.getRangeAt(0).getBoundingClientRect();
     const wrap = editorWrap.current?.getBoundingClientRect();
@@ -368,14 +434,21 @@ export default function DraftingView() {
         ]}
         status={
           <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-            <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.green, animation: "pulse 2s infinite" }} />
-            <span style={{ fontSize: 9, color: C.green, letterSpacing: "0.08em" }}>DRAFT READY</span>
+            <div style={{ width: 6, height: 6, borderRadius: "50%", background: incomplete ? C.amber : C.green, animation: "pulse 2s infinite" }} />
+            <span style={{ fontSize: 9, color: incomplete ? C.amber : C.green, letterSpacing: "0.08em" }}>
+              {incomplete ? "INCOMPLETE" : "DRAFT READY"}
+            </span>
           </div>
         }
         actions={
           <>
             <span style={{ fontSize: 11, color: C.textMut, fontFamily: F.sans, marginRight: 4 }}>{wordCount.toLocaleString()} words</span>
-            <Btn onClick={() => { setStage("intake"); setDocText(""); setNotes(""); }}>← Regenerate</Btn>
+            {incomplete && (
+              <Btn primary onClick={continueDraft} disabled={isGenerating}>
+                {continuing ? "Continuing…" : "Continue drafting"}
+              </Btn>
+            )}
+            <Btn onClick={() => { setStage("intake"); setDocText(""); setIncomplete(false); }}>← Regenerate</Btn>
             <Btn onClick={() => setExportModal(true)}>↓ Export Word</Btn>
             <Btn onClick={() => navigator.clipboard?.writeText(docText)}>Copy</Btn>
             <Btn primary>Save to Matter</Btn>
@@ -387,6 +460,11 @@ export default function DraftingView() {
       <div style={{flex:1,display:"flex",overflow:"hidden"}}>
         {/* editor canvas */}
         <div ref={editorWrap} style={{flex:1,overflowY:"auto",padding:"28px 36px",position:"relative"}} onMouseUp={handleSelect}>
+          {incomplete && (
+            <div role="status" style={{marginBottom:12,padding:"9px 13px",background:`${C.amber}0E`,border:`1px solid ${C.amber}33`,borderRadius:6,fontSize:11,color:C.amber,fontFamily:F.sans,lineHeight:1.55}}>
+              Generation stopped before a signature block. Use Continue drafting to finish the remaining clauses.
+            </div>
+          )}
           {saveWarning && (
             <div role="alert" style={{marginBottom:12,padding:"9px 13px",background:`${C.amber}0E`,border:`1px solid ${C.amber}33`,borderRadius:6,fontSize:11,color:C.amber,fontFamily:F.sans,lineHeight:1.55}}>
               {saveWarning} Copy or export this draft before leaving the page.
@@ -405,7 +483,7 @@ export default function DraftingView() {
 
           {/* clause popup */}
           {clausePanel&&(
-            <div style={{position:"absolute",top:clausePanel.top,left:Math.min(clausePanel.left,350),width:340,background:C.bgPanel,border:`1px solid ${C.borderMid}`,borderRadius:9,overflow:"hidden",zIndex:50,animation:"fadeUp 0.2s ease",boxShadow:"0 8px 30px rgba(0,0,0,0.55)"}}>
+            <div ref={clausePanelRef} style={{position:"absolute",top:clausePanel.top,left:Math.min(clausePanel.left,350),width:340,background:C.bgPanel,border:`1px solid ${C.borderMid}`,borderRadius:9,overflow:"hidden",zIndex:50,animation:"fadeUp 0.2s ease",boxShadow:"0 8px 30px rgba(0,0,0,0.55)"}}>
               <div style={{padding:"9px 13px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                 <span style={{fontSize:10,color:C.textMut,letterSpacing:"0.1em",textTransform:"uppercase"}}>Clause Analysis</span>
                 <span onClick={()=>setClausePanel(null)} style={{fontSize:15,color:C.textMut,cursor:"pointer",lineHeight:1}}>×</span>
@@ -445,7 +523,9 @@ export default function DraftingView() {
                 ["Type",     dtInfo?.label],
                 ["Law",      form.governing||"India"],
                 ["Words",    wordCount.toLocaleString()],
-                ["Created",  new Date().toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"numeric"})],
+                ["Created",  createdAt
+                  ? new Date(createdAt).toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"numeric"})
+                  : "—"],
               ].map(([k,v])=>(
                 <div key={k} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
                   <span style={{fontSize:10,color:C.textMut,fontFamily:F.sans}}>{k}</span>

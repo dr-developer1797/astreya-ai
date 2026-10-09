@@ -1,10 +1,5 @@
 import { isAbortError } from "./errors";
-
-// Raising this does not buy a longer document: the model's hidden thought step expands to
-// fill whatever budget it is given (at 2400 it ran ~43s before any text appeared, versus
-// ~31s at 2000, and no run of nine reached a signature block), and 2400 tokens already
-// takes ~53s of generation against the 60s function ceiling.
-export const MAX_TOKENS = 2000;
+import { FEATURES } from "./features";
 
 // Turns a non-2xx response into a message that names the actual failure.
 export async function describeFailure(res) {
@@ -30,15 +25,29 @@ export async function describeFailure(res) {
   return detail ? `API ${res.status} — ${detail.slice(0, 300)}` : `API ${res.status}`;
 }
 
-export async function callLLM({ sys, messages, stream = true, signal }) {
+/**
+ * Call /api/chat with a server-registered feature id.
+ * System prompts and token budgets are resolved on the server — never sent from the client.
+ */
+export async function callLLM({
+  feature,
+  featureOpts,
+  messages,
+  stream = true,
+  signal,
+}) {
+  if (!feature || !FEATURES[feature]) {
+    throw new Error("A valid Astreya feature id is required.");
+  }
+
   const init = {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
+      feature,
+      featureOpts,
       messages,
-      sys,
       stream,
-      max_tokens: MAX_TOKENS,
     }),
     signal,
   };

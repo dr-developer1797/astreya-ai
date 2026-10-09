@@ -1,13 +1,20 @@
 import { callLLM, extractStreamEvent } from "./client";
+import { FEATURES } from "./features";
 import { createAbortError } from "./errors";
 
 function throwIfAborted(signal) {
   if (signal?.aborted) throw createAbortError();
 }
 
-export async function streamChatCompletion({ sys, messages, onToken, signal }) {
+export async function streamChatCompletion({
+  feature,
+  featureOpts,
+  messages,
+  onToken,
+  signal,
+}) {
   throwIfAborted(signal);
-  const res = await callLLM({ sys, messages, stream: true, signal });
+  const res = await callLLM({ feature, featureOpts, messages, stream: true, signal });
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let full = "";
@@ -51,4 +58,8 @@ export async function streamChatCompletion({ sys, messages, onToken, signal }) {
   }
   throwIfAborted(signal);
   return full;
+}
+
+export function charBudgetFor(feature) {
+  return FEATURES[feature]?.charBudget ?? 2800;
 }

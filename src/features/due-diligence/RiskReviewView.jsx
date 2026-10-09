@@ -7,6 +7,7 @@ import ViewHeader from "@/shared/ui/ViewHeader";
 import ExportModal from "@/shared/modals/ExportModal";
 import { isAbortError } from "@/shared/llm/errors";
 import { callLLM, extractResponse } from "@/shared/llm/client";
+import { parseRiskReport } from "@/shared/llm/riskParse";
 import { RISK_COLORS, RISK_BG, CONTRACT_TYPES, SAMPLE_CONTRACT } from "@/features/due-diligence/constants";
 import { countWords } from "@/shared/utils/text";
 import { useAbortController } from "@/shared/hooks/useAbortController";
@@ -28,11 +29,12 @@ export default function RiskReviewView() {
   const [filterLevel, setFilterLevel]   = useState("ALL");
   const [exportModal, setExportModal]   = useState(false);
   const [inputError, setInputError]     = useState("");
+  const [analysisError, setAnalysisError] = useState("");
   const fileRef = useRef(null);
 
   /* ── RUN ANALYSIS ── */
   const runAnalysis = useCallback(async (text, ctype, persp) => {
-    setStage("analysing"); setProgress(0);
+    setStage("analysing"); setProgress(0); setAnalysisError("");
 
     const msgs = [
       "Segmenting clauses…", "Checking Indian Contract Act compliance…",
@@ -42,28 +44,6 @@ export default function RiskReviewView() {
     ];
     let mi = 0;
     setStatusMsg(msgs[0]);
-
-    const sys = `You are a senior Indian contracts lawyer specialising in risk analysis. Analyse the provided contract from the perspective of ${persp === "party_a" ? "Party A (first party)" : persp === "party_b" ? "Party B (second party)" : "a neutral reviewer"}. Return ONLY valid JSON — no markdown, no explanation, no code fences. Use this exact schema:
-{
-  "overall_score": <number 1-10, 10 = highest risk>,
-  "contract_type_detected": "<string>",
-  "summary": "<2-3 sentence executive summary of key risks>",
-  "risks": [
-    {
-      "id": "R1",
-      "clause_ref": "<e.g. Clause 3.1 or Recital B>",
-      "clause_excerpt": "<verbatim excerpt, max 180 chars>",
-      "risk_level": "<CRITICAL|HIGH|MEDIUM|LOW|INFO>",
-      "risk_type": "<short label e.g. Unlimited Liability>",
-      "issue": "<2-3 sentences explaining the legal concern under Indian law>",
-      "legal_basis": "<primary Indian statute or case law>",
-      "suggested_revision": "<improved clause text>"
-    }
-  ],
-  "missing_clauses": ["<clause name>"],
-  "positive_clauses": ["<well-drafted clause description>"]
-}
-Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specific Relief Act 1963, relevant labour/IP/arbitration statutes). Return ONLY the JSON object.`;
 
     const usr = `Contract Type: ${ctype || "Unknown"}\nParty Perspective: ${persp}\n\n${text}`;
 
@@ -78,14 +58,19 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
         setProgress(p => Math.min(p + Math.floor(Math.random() * 14) + 6, 88));
       }, 1800);
 
-      const res = await callLLM({ sys, messages:[{role:"user",content:usr}], stream:false, signal });
+      const res = await callLLM({
+        feature: "risk",
+        featureOpts: { perspective: persp },
+        messages: [{ role: "user", content: usr }],
+        stream: false,
+        signal,
+      });
       if (isStaleGeneration(gen)) return;
       clearScheduled(ticker);
       setProgress(95);
       const data = await res.json();
-      const raw  = extractResponse(data) || "{}";
-      const clean = raw.replace(/```json|```/gi, "").trim();
-      const parsed = JSON.parse(clean);
+      const raw  = extractResponse(data) || "";
+      const parsed = parseRiskReport(raw, text);
       if (isStaleGeneration(gen)) return;
       setResults(parsed);
       setProgress(100);
@@ -102,12 +87,11 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
         setProgress(0);
         return;
       }
-      setResults({
-        overall_score: 0, contract_type_detected: ctype,
-        summary: `Analysis error: ${err.message}. Please try again.`,
-        risks: [], missing_clauses: [], positive_clauses: [],
-      });
-      setStage("results");
+      setResults(null);
+      setActiveRisk(null);
+      setAnalysisError(err instanceof Error ? err.message : "Risk analysis failed. Please try again.");
+      setStage("upload");
+      setProgress(0);
     }
   }, [getSignal, getGeneration, isStaleGeneration, scheduleInterval, scheduleTimeout, clearScheduled]);
 
@@ -139,11 +123,12 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
   const activeIndex = displayRisk ? filteredRisks.findIndex(r => r.id === displayRisk.id) : -1;
 
   const scoreColor = results
-    ? results.overall_score >= 8 ? RISK_COLORS.CRITICAL
-      : results.overall_score >= 6 ? RISK_COLORS.HIGH
-      : results.overall_score >= 4 ? RISK_COLORS.MEDIUM
+    ? Number(results.overall_score) >= 8 ? RISK_COLORS.CRITICAL
+      : Number(results.overall_score) >= 6 ? RISK_COLORS.HIGH
+      : Number(results.overall_score) >= 4 ? RISK_COLORS.MEDIUM
       : RISK_COLORS.LOW
     : C.textMut;
+  const scoreLabel = results ? Number(results.overall_score).toFixed(1) : "—";
 
   /* ─ UPLOAD STAGE ─ */
   if (stage === "upload") return (
@@ -236,6 +221,11 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
               {inputError}
             </div>
           )}
+          {analysisError && (
+            <div role="alert" style={{padding:"9px 13px",background:C.redFaint,border:`1px solid ${C.redGlow}`,borderRadius:6,marginBottom:14,fontSize:11,color:C.red,fontFamily:F.sans,lineHeight:1.55}}>
+              Could not analyse the contract: {analysisError}
+            </div>
+          )}
           <div style={{display:"flex",alignItems:"center",gap:10}}>
             <button onClick={handleAnalyse} disabled={contractLength < 100 || contractTooLong}
               style={{padding:"11px 28px",background:contractLength>=100&&!contractTooLong?C.red:"#2A1A1E",border:"none",borderRadius:7,color:contractLength>=100&&!contractTooLong?"#fff":C.textMut,fontSize:13,fontWeight:500,cursor:contractLength>=100&&!contractTooLong?"pointer":"not-allowed",fontFamily:F.sans,letterSpacing:"0.04em",transition:"all 0.15s"}}
@@ -297,7 +287,7 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
         status={
           <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
             <div style={{ width: 6, height: 6, borderRadius: "50%", background: scoreColor, animation: "pulse 2s infinite" }} />
-            <span style={{ fontSize: 9, color: scoreColor, letterSpacing: "0.08em", fontWeight: 600 }}>RISK {results?.overall_score?.toFixed(1)}/10</span>
+            <span style={{ fontSize: 9, color: scoreColor, letterSpacing: "0.08em", fontWeight: 600 }}>RISK {scoreLabel}/10</span>
           </div>
         }
         actions={
@@ -324,7 +314,7 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
               <div>
                 <div style={{fontSize:9,color:C.textMut,letterSpacing:"0.13em",textTransform:"uppercase",marginBottom:4}}>Overall Risk Score</div>
-                <div style={{fontFamily:F.serif,fontSize:32,fontWeight:700,color:scoreColor,lineHeight:1}}>{results?.overall_score?.toFixed(1)}</div>
+                <div style={{fontFamily:F.serif,fontSize:32,fontWeight:700,color:scoreColor,lineHeight:1}}>{scoreLabel}</div>
                 <div style={{fontSize:9,color:C.textMut,marginTop:2,fontFamily:F.sans}}>out of 10</div>
               </div>
               {/* mini donut visual */}
@@ -332,7 +322,7 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
                 <svg viewBox="0 0 56 56" style={{transform:"rotate(-90deg)"}}>
                   <circle cx="28" cy="28" r="22" fill="none" stroke={C.bgHover} strokeWidth="5"/>
                   <circle cx="28" cy="28" r="22" fill="none" stroke={scoreColor} strokeWidth="5"
-                    strokeDasharray={`${(results?.overall_score/10)*138} 138`}
+                    strokeDasharray={`${(Number(results?.overall_score || 0)/10)*138} 138`}
                     strokeLinecap="round" style={{transition:"stroke-dasharray 1s ease"}}/>
                 </svg>
               </div>
@@ -397,7 +387,12 @@ Identify 5-9 risks. Be specific to Indian law (Indian Contract Act 1872, Specifi
 
               {/* clause excerpt */}
               <div style={{background:C.bgCard,border:`1px solid ${C.border}`,borderLeft:`3px solid ${RISK_COLORS[displayRisk.risk_level]}`,borderRadius:"0 8px 8px 0",padding:"14px 16px",marginBottom:20}}>
-                <div style={{fontSize:9,color:C.textMut,letterSpacing:"0.12em",textTransform:"uppercase",marginBottom:7,fontFamily:F.sans}}>Clause Excerpt</div>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:7}}>
+                  <div style={{fontSize:9,color:C.textMut,letterSpacing:"0.12em",textTransform:"uppercase",fontFamily:F.sans}}>Clause Excerpt</div>
+                  {displayRisk.excerpt_verified === false && (
+                    <span style={{fontSize:9,color:C.amber,letterSpacing:"0.06em",fontFamily:F.sans}}>UNVERIFIED vs contract text</span>
+                  )}
+                </div>
                 <p style={{fontSize:12.5,color:C.textPri,fontFamily:F.sans,fontWeight:300,lineHeight:1.8,fontStyle:"italic"}}>&ldquo;{displayRisk.clause_excerpt}&rdquo;</p>
               </div>
 

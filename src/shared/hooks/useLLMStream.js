@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { streamChatCompletion } from "@/shared/llm/stream";
+import { streamChatCompletion, charBudgetFor } from "@/shared/llm/stream";
 import { isAbortError } from "@/shared/llm/errors";
 import { useAbortController } from "@/shared/hooks/useAbortController";
 
@@ -17,15 +17,17 @@ export function useLLMStream() {
   const [progress, setProgress] = useState(0);
 
   const stream = useCallback(async ({
-    sys,
+    feature,
+    featureOpts,
     messages,
-    charBudget = 2800,
+    charBudget,
     onProgress,
     signal: externalSignal,
     generation: externalGen,
   }) => {
     const signal = externalSignal ?? getSignal();
     const gen = externalGen ?? getGeneration();
+    const budget = charBudget ?? charBudgetFor(feature);
 
     setStreaming(true);
     setText("");
@@ -35,14 +37,15 @@ export function useLLMStream() {
     try {
       let chars = 0;
       const full = await streamChatCompletion({
-        sys,
+        feature,
+        featureOpts,
         messages,
         signal,
         onToken: (accumulated, chunk) => {
           if (isStaleGeneration(gen)) return;
           chars += chunk.length;
           setText(accumulated);
-          const pct = Math.min(99, Math.round((chars / charBudget) * 100));
+          const pct = Math.min(99, Math.round((chars / budget) * 100));
           setProgress(pct);
           onProgress?.(accumulated, pct);
         },

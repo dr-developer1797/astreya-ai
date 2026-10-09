@@ -51,7 +51,7 @@ describe("streamChatCompletion", () => {
     });
 
     const full = await streamChatCompletion({
-      sys: "test",
+      feature: "research",
       messages: [{ role: "user", content: "hi" }],
     });
 
@@ -64,6 +64,7 @@ describe("streamChatCompletion", () => {
 
     await expect(
       streamChatCompletion({
+        feature: "research",
         messages: [{ role: "user", content: "hi" }],
         signal: controller.signal,
       }),
@@ -80,6 +81,7 @@ describe("streamChatCompletion", () => {
 
     await expect(
       streamChatCompletion({
+        feature: "research",
         messages: [{ role: "user", content: "hi" }],
         signal: controller.signal,
       }),
@@ -99,6 +101,7 @@ describe("streamChatCompletion", () => {
 
     await expect(
       streamChatCompletion({
+        feature: "research",
         messages: [{ role: "user", content: "hi" }],
       }),
     ).rejects.toThrow("quota exceeded");

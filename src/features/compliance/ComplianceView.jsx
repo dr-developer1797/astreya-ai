@@ -11,6 +11,7 @@ import ExportModal from "@/shared/modals/ExportModal";
 import { useLLMStream } from "@/shared/hooks/useLLMStream";
 import { useFormState } from "@/shared/hooks/useFormState";
 import { useTimeoutCleanup } from "@/shared/hooks/useTimeoutCleanup";
+import { isReportIncomplete } from "@/shared/llm/completeness";
 
 export default function ComplianceView() {
   const { streaming, text: report, progress, stream, reset } = useLLMStream();
@@ -19,6 +20,7 @@ export default function ComplianceView() {
   const [form, setF, setForm]   = useFormState({sectors:[]});
   const [exportModal, setExportModal] = useState(false);
   const [generationError, setGenerationError] = useState("");
+  const [incomplete, setIncomplete] = useState(false);
   const scrollRef               = useRef(null);
 
   useEffect(()=>{ if(scrollRef.current) scrollRef.current.scrollTop=scrollRef.current.scrollHeight; },[report]);
@@ -34,22 +36,8 @@ export default function ComplianceView() {
     if(!form.state||!form.entity_type)return;
     reset();
     setGenerationError("");
+    setIncomplete(false);
     setStage("generating");
-
-    const sys=`You are a senior Indian compliance lawyer and CA with expertise in all central and state regulations. Generate a comprehensive, actionable Compliance Checklist using EXACT Markdown structure:
-
-## Entity & Registration Compliance
-## Labour & Employment Compliance
-## Tax Compliance (Direct & Indirect)
-## Sector-Specific Regulatory Compliance
-## Data Protection & IT Compliance
-## Corporate Governance & MCA Filings
-## Environmental & Other Statutory Requirements
-## Upcoming Deadlines & Critical Alerts
-## Recommended Actions (Priority Order)
-
-For each item include: ✅ Status indicator, Act/Rule reference, authority name, deadline or frequency, and penalty for non-compliance.
-Be state-specific. Include recent 2024–2026 regulatory changes. End with: "⚠ Checklist is AI-generated. Consult a CA/CS/Advocate for final compliance advice."`;
 
     const usr=`Entity Type: ${form.entity_type}
 State: ${form.state}
@@ -62,14 +50,14 @@ Special Notes: ${form.notes||"None"}`;
 
     try {
       const full = await stream({
-        sys,
+        feature: "compliance",
         messages: [{ role: "user", content: usr }],
-        charBudget: 3000,
       });
       if (!full) {
         setStage("form");
         return;
       }
+      setIncomplete(isReportIncomplete(full));
       scheduleTimeout(() => setStage("results"), 350);
     } catch (err) {
       setGenerationError(err instanceof Error ? err.message : "Checklist generation failed. Please try again.");
@@ -173,13 +161,15 @@ Special Notes: ${form.notes||"None"}`;
         ]}
         status={
           <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-            <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.green, animation: "pulse 2s infinite" }} />
-            <span style={{ fontSize: 9, color: C.green, letterSpacing: "0.08em" }}>COMPLETE</span>
+            <div style={{ width: 6, height: 6, borderRadius: "50%", background: incomplete ? C.amber : C.green, animation: "pulse 2s infinite" }} />
+            <span style={{ fontSize: 9, color: incomplete ? C.amber : C.green, letterSpacing: "0.08em" }}>
+              {incomplete ? "INCOMPLETE" : "COMPLETE"}
+            </span>
           </div>
         }
         actions={
           <>
-            <Btn compact onClick={() => { setStage("form"); reset(); }}>← New</Btn>
+            <Btn compact onClick={() => { setStage("form"); reset(); setIncomplete(false); }}>← New</Btn>
             <Btn compact onClick={() => navigator.clipboard?.writeText(report)}>Copy</Btn>
             <Btn compact onClick={() => setExportModal(true)}>↓ Export Word</Btn>
           </>
@@ -187,6 +177,11 @@ Special Notes: ${form.notes||"None"}`;
       />
       <div style={{flex:1,display:"flex",overflow:"hidden"}}>
         <div ref={scrollRef} style={{flex:1,overflowY:"auto",padding:"28px 36px"}}>
+          {incomplete && (
+            <div role="status" style={{maxWidth:700,marginBottom:14,padding:"9px 13px",background:`${C.amber}0E`,border:`1px solid ${C.amber}33`,borderRadius:6,fontSize:11,color:C.amber,fontFamily:F.sans,lineHeight:1.55}}>
+              Checklist may be truncated — verify all sections before relying on it. Items are to-dos (☐), not verified compliance status.
+            </div>
+          )}
           <div style={{maxWidth:700,background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:10,padding:"32px 36px"}}>
             {report && <Markdown text={report} variant="compliance" />}
           </div>

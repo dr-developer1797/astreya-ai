@@ -11,14 +11,18 @@ import ExportModal from "@/shared/modals/ExportModal";
 import { useLLMStream } from "@/shared/hooks/useLLMStream";
 import { useFormState } from "@/shared/hooks/useFormState";
 import { useTimeoutCleanup } from "@/shared/hooks/useTimeoutCleanup";
+import { isReportIncomplete } from "@/shared/llm/completeness";
+import { buildIkContext, fetchIkSources } from "@/shared/llm/ikContext";
 
 export default function LitigationView() {
-  const { streaming, text: report, progress, stream, reset } = useLLMStream();
+  const { streaming, text: report, progress, stream, reset, getSignal } = useLLMStream();
   const { scheduleTimeout } = useTimeoutCleanup();
   const [stage, setStage]       = useState("form");
   const [form, setF]            = useFormState({});
   const [exportModal, setExportModal] = useState(false);
   const [generationError, setGenerationError] = useState("");
+  const [incomplete, setIncomplete] = useState(false);
+  const [ikWarning, setIkWarning] = useState("");
   const scrollRef               = useRef(null);
 
   useEffect(()=>{
@@ -33,25 +37,11 @@ export default function LitigationView() {
     if (!form.facts?.trim() || form.facts.trim().length < 40) return;
     reset();
     setGenerationError("");
+    setIncomplete(false);
+    setIkWarning("");
     setStage("generating");
-    const sys = `You are a senior Indian litigator with 25 years of courtroom experience. Produce a detailed Litigation Strategy Report using this EXACT structure (use Markdown headings and bullets):
 
-## Matter Overview
-## Applicable Statutes & Jurisdiction
-## Limitation Period
-## Strengths (score X/10)
-## Weaknesses & Risks (score X/10)
-## Recommended Legal Strategy (numbered steps)
-## Key Legal Arguments
-## Binding Precedents (cite SCC/AIR with short note)
-## Evidence Checklist
-## Interim Relief Options
-## Estimated Timeline
-## Cost-Benefit Assessment
-
-Be specific to Indian law. Cite statutes and Supreme Court precedents. End with: "⚠ Strategy output only — consult a qualified advocate before proceeding."`;
-
-    const usr = `CLIENT POSITION: ${form.position||"Not specified"}
+    const usrBase = `CLIENT POSITION: ${form.position||"Not specified"}
 COURT / FORUM: ${form.court||"Not specified"}
 DOMAIN: ${form.domain||"Not specified"}
 OPPONENT: ${form.opponent||"Not specified"}
@@ -59,22 +49,32 @@ BRIEF FACTS:\n${form.facts}
 SPECIFIC CONCERNS: ${form.concerns||"None"}
 NOTES: ${form.notes||"None"}`;
 
+    let ikBlock = "";
+    try {
+      const query = [form.domain, form.facts.slice(0, 280)].filter(Boolean).join(" — ");
+      const ik = await fetchIkSources(query, { signal: getSignal() });
+      ikBlock = buildIkContext(ik.sources);
+      setIkWarning(ik.warning || "");
+    } catch (err) {
+      setIkWarning(`IndianKanoon unavailable (${err instanceof Error ? err.message : "error"}) — precedents may be ungrounded.`);
+    }
+
     try {
       const full = await stream({
-        sys,
-        messages: [{ role: "user", content: usr }],
-        charBudget: 2800,
+        feature: "litigation",
+        messages: [{ role: "user", content: usrBase + ikBlock }],
       });
       if (!full) {
         setStage("form");
         return;
       }
+      setIncomplete(isReportIncomplete(full));
       scheduleTimeout(() => setStage("results"), 350);
     } catch (err) {
       setGenerationError(err instanceof Error ? err.message : "Strategy generation failed. Please try again.");
       setStage("form");
     }
-  }, [form, stream, reset, scheduleTimeout]);
+  }, [form, stream, reset, scheduleTimeout, getSignal]);
 
   if(stage==="form") return (
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
@@ -156,13 +156,15 @@ NOTES: ${form.notes||"None"}`;
         ]}
         status={
           <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-            <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.green, animation: "pulse 2s infinite" }} />
-            <span style={{ fontSize: 9, color: C.green, letterSpacing: "0.08em" }}>COMPLETE</span>
+            <div style={{ width: 6, height: 6, borderRadius: "50%", background: incomplete ? C.amber : C.green, animation: "pulse 2s infinite" }} />
+            <span style={{ fontSize: 9, color: incomplete ? C.amber : C.green, letterSpacing: "0.08em" }}>
+              {incomplete ? "INCOMPLETE" : "COMPLETE"}
+            </span>
           </div>
         }
         actions={
           <>
-            <Btn compact onClick={() => { setStage("form"); reset(); }}>← New Matter</Btn>
+            <Btn compact onClick={() => { setStage("form"); reset(); setIncomplete(false); }}>← New Matter</Btn>
             <Btn compact onClick={() => navigator.clipboard?.writeText(report)}>Copy</Btn>
             <Btn compact onClick={() => setExportModal(true)}>↓ Export Word</Btn>
           </>
@@ -170,6 +172,12 @@ NOTES: ${form.notes||"None"}`;
       />
       <div style={{flex:1,display:"flex",overflow:"hidden"}}>
         <div ref={scrollRef} style={{flex:1,overflowY:"auto",padding:"28px 36px"}}>
+          {(incomplete || ikWarning) && (
+            <div role="status" style={{maxWidth:700,marginBottom:14,padding:"9px 13px",background:`${C.amber}0E`,border:`1px solid ${C.amber}33`,borderRadius:6,fontSize:11,color:C.amber,fontFamily:F.sans,lineHeight:1.55}}>
+              {incomplete ? "Report may be truncated — verify all sections before relying on it. " : ""}
+              {ikWarning}
+            </div>
+          )}
           <div style={{maxWidth:700,background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:10,padding:"32px 36px"}}>
             {report && <Markdown text={report} variant="report" />}
           </div>

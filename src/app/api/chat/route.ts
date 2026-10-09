@@ -1,11 +1,10 @@
 import { guardApiRequest } from "@/shared/api/guard";
 import { logApiEvent } from "@/shared/api/log";
+import { isFeatureId, resolveFeature, type FeatureOpts } from "@/shared/llm/features";
 
 const GEMMA_API_URL = "https://generativelanguage.googleapis.com/v1beta/interactions";
 const DEFAULT_MODEL = "gemma-4-26b-a4b-it";
 const MAX_INPUT_CHARS = 120_000;
-const MAX_OUTPUT_TOKENS = 8192;
-const DEFAULT_OUTPUT_TOKENS = 2000;
 const CONNECT_TIMEOUT_MS = 20_000;
 const RETRY_STATUS = new Set([429, 500, 502, 503, 504]);
 const RETRY_BASE_MS = 700;
@@ -348,8 +347,11 @@ export async function POST(req: Request) {
   const started = Date.now();
   let payload: {
     messages?: unknown;
-    sys?: unknown;
+    feature?: unknown;
+    featureOpts?: unknown;
     stream?: unknown;
+    // Legacy client fields — ignored. Prompts and token budgets come from the feature registry.
+    sys?: unknown;
     max_tokens?: unknown;
   };
 
@@ -367,6 +369,13 @@ export async function POST(req: Request) {
     );
   }
 
+  if (!isFeatureId(payload.feature)) {
+    return Response.json(
+      { error: "A valid feature id is required (research, draft, risk, litigation, compliance, clause)." },
+      { status: 400 },
+    );
+  }
+
   const messages = payload.messages;
   if (!Array.isArray(messages) || messages.length === 0 || !messages.every(isChatMessage)) {
     return Response.json({ error: "At least one valid chat message is required." }, { status: 400 });
@@ -377,26 +386,34 @@ export async function POST(req: Request) {
     return Response.json({ error: "Conversation is too long." }, { status: 413 });
   }
 
+  const rawOpts =
+    payload.featureOpts && typeof payload.featureOpts === "object"
+      ? (payload.featureOpts as Record<string, unknown>)
+      : {};
+  const featureOpts: FeatureOpts = {
+    docLabel: typeof rawOpts.docLabel === "string" ? rawOpts.docLabel.slice(0, 120) : undefined,
+    perspective: typeof rawOpts.perspective === "string" ? rawOpts.perspective.slice(0, 40) : undefined,
+  };
+  const resolved = resolveFeature(payload.feature, featureOpts);
   const stream = payload.stream !== false;
-  const sys = typeof payload.sys === "string" && payload.sys.trim() ? payload.sys.trim() : undefined;
-  const requestedTokens = payload.max_tokens;
-  const maxOutputTokens =
-    typeof requestedTokens === "number" && Number.isFinite(requestedTokens) && requestedTokens >= 1
-      ? Math.min(Math.trunc(requestedTokens), MAX_OUTPUT_TOKENS)
-      : DEFAULT_OUTPUT_TOKENS;
 
   const result = await resolveUpstream(
     messages,
-    sys,
+    resolved.system,
     stream,
-    maxOutputTokens,
+    resolved.maxTokens,
     apiKey,
     req.signal,
   );
   if (!result.ok) return result.response;
 
   const upstream = result.upstream;
-  logApiEvent("chat.success", { ms: Date.now() - started, stream });
+  logApiEvent("chat.success", {
+    ms: Date.now() - started,
+    stream,
+    feature: payload.feature,
+    maxTokens: resolved.maxTokens,
+  });
 
   if (stream && upstream.body) {
     return new Response(toOpenAIStream(upstream.body), {
