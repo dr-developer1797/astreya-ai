@@ -13,6 +13,7 @@ import { useFormState } from "@/shared/hooks/useFormState";
 import { useTimeoutCleanup } from "@/shared/hooks/useTimeoutCleanup";
 import { isReportIncomplete } from "@/shared/llm/completeness";
 import { buildIkContext, fetchIkSources } from "@/shared/llm/ikContext";
+import { usePersistReport } from "@/shared/convex/usePersistReport";
 
 export default function LitigationView() {
   const { streaming, text: report, progress, stream, reset, getSignal } = useLLMStream();
@@ -28,6 +29,14 @@ export default function LitigationView() {
   useEffect(()=>{
     if(scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   },[report]);
+
+  usePersistReport({
+    kind: "litigation",
+    title: `Litigation — ${form.domain || "Strategy"}`,
+    content: report,
+    enabled: stage === "results" && !incomplete && Boolean(report?.trim()),
+    meta: { form },
+  });
 
   const COURTS = ["Supreme Court of India","High Court – Bombay","High Court – Delhi","High Court – Madras","High Court – Karnataka","High Court – Calcutta","High Court – Allahabad","High Court – Gujarat","NCLT","NCLAT","Consumer Forum","Other Tribunal"];
   const POSITIONS = ["Plaintiff / Petitioner","Defendant / Respondent","Appellant","Complainant","Accused"];

@@ -12,6 +12,7 @@ import { useLLMStream } from "@/shared/hooks/useLLMStream";
 import { useFormState } from "@/shared/hooks/useFormState";
 import { useTimeoutCleanup } from "@/shared/hooks/useTimeoutCleanup";
 import { isReportIncomplete } from "@/shared/llm/completeness";
+import { usePersistReport } from "@/shared/convex/usePersistReport";
 
 export default function ComplianceView() {
   const { streaming, text: report, progress, stream, reset } = useLLMStream();
@@ -24,6 +25,14 @@ export default function ComplianceView() {
   const scrollRef               = useRef(null);
 
   useEffect(()=>{ if(scrollRef.current) scrollRef.current.scrollTop=scrollRef.current.scrollHeight; },[report]);
+
+  usePersistReport({
+    kind: "compliance",
+    title: `Compliance — ${form.entity || form.state || "Report"}`,
+    content: report,
+    enabled: stage === "results" && !incomplete && Boolean(report?.trim()),
+    meta: { form },
+  });
 
   const STATES = ["Maharashtra","Karnataka","Delhi","Tamil Nadu","Telangana","Gujarat","West Bengal","Rajasthan","Uttar Pradesh","Punjab","Haryana","Kerala","Andhra Pradesh","Madhya Pradesh"];
   const ENTITY_TYPES = ["Private Limited Company","Public Limited Company","LLP","Sole Proprietorship","Partnership Firm","Startup (DPIIT Recognised)","NGO / Section 8 Company","Foreign Company Branch","OPC (One Person Company)"];

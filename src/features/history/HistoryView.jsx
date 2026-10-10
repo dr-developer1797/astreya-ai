@@ -1,16 +1,28 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
+import { useQuery } from "convex/react";
 import { C, F } from "@/shared/constants/theme";
 import Label from "@/shared/ui/Label";
 import ViewHeader from "@/shared/ui/ViewHeader";
 import ExportModal from "@/shared/modals/ExportModal";
 import { listDrafts, deleteDraft } from "@/shared/storage/drafts";
 import { useMatter } from "@/shared/context/MatterContext";
-import { MATTERS } from "@/shared/constants/matters";
+import { useWorkspace } from "@/shared/convex/WorkspaceProvider";
+import { api } from "../../../convex/_generated/api";
+
+const KIND_ICON = {
+  draft: "📝",
+  research: "🔍",
+  litigation: "⚖",
+  compliance: "✅",
+  risk: "⚑",
+};
 
 export default function HistoryView() {
-  const { matterId } = useMatter();
+  const { clientKey } = useWorkspace();
+  const { matterId, matter } = useMatter();
+  const cloudArtifacts = useQuery(api.artifacts.listForWorkspace, { clientKey, limit: 120 });
   const [drafts,   setDrafts]   = useState(null);
   const [selected, setSelected] = useState(null);
   const [search,   setSearch]   = useState("");
@@ -38,14 +50,54 @@ export default function HistoryView() {
     setDeleting(null);
   };
 
-  const sel        = selected ? (drafts||[]).find(d=>d.id===selected) : null;
-  const categories = [...new Set((drafts||[]).map(d=>d.category).filter(Boolean))];
+  const items = useMemo(() => {
+    const local = (drafts || []).map((d) => ({
+      id: d.id,
+      source: "local",
+      kind: "draft",
+      category: d.category || "Draft",
+      typeLabel: d.typeLabel,
+      typeIcon: d.typeIcon || "📝",
+      content: d.content || "",
+      createdAt: d.createdAt,
+      matterId: d.matterId,
+      form: d.form,
+      notes: d.notes,
+      wordCount: d.wordCount,
+      typeShort: d.typeShort,
+    }));
+    const cloud = (cloudArtifacts || []).map((a) => ({
+      id: a._id,
+      source: "cloud",
+      kind: a.kind,
+      category: a.kind.charAt(0).toUpperCase() + a.kind.slice(1),
+      typeLabel: a.title,
+      typeIcon: KIND_ICON[a.kind] || "📎",
+      content: a.content,
+      createdAt: a.createdAt,
+      matterId: a.matterId,
+      form: a.meta?.form,
+      notes: a.meta?.notes,
+      wordCount: a.content?.split(/\s+/).filter(Boolean).length ?? 0,
+      typeShort: a.kind,
+    }));
+    return [...cloud, ...local].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  }, [cloudArtifacts, drafts]);
 
-  const filtered = (drafts||[]).filter(d=>{
-    const matchM = matterFilter === "all" || d.matterId === matterId || (!d.matterId && matterFilter === "current");
-    const matchF = filter==="ALL" || d.category===filter;
-    const matchS = !search.trim() ||
-      (d.typeLabel+d.category+(d.form?.party_a||"")+(d.form?.party_b||"")+(d.form?.employer||"")+(d.form?.employee||"")+(d.form?.provider||"")).toLowerCase().includes(search.toLowerCase());
+  const sel = selected ? items.find((d) => d.id === selected) : null;
+  const categories = [...new Set(items.map((d) => d.category).filter(Boolean))];
+
+  const filtered = items.filter((d) => {
+    const matchM =
+      matterFilter === "all" ||
+      d.matterId === matterId ||
+      (!d.matterId && matterFilter === "current");
+    const matchF = filter === "ALL" || d.category === filter;
+    const matchS =
+      !search.trim() ||
+      (d.typeLabel + d.category + (d.form?.party_a || "") + (d.form?.party_b || ""))
+        .toLowerCase()
+        .includes(search.toLowerCase());
     return matchM && matchF && matchS;
   });
 
@@ -77,11 +129,11 @@ export default function HistoryView() {
       {/* topbar */}
       <ViewHeader
         crumbs={[{ label: "History" }]}
-        status={drafts !== null && <span style={{ color: C.textMut, marginLeft: 2 }}>— {filtered.length} draft{filtered.length !== 1 ? "s" : ""}</span>}
+        status={drafts !== null && <span style={{ color: C.textMut, marginLeft: 2 }}>— {filtered.length} saved item{filtered.length !== 1 ? "s" : ""}</span>}
         actions={
           <div className="ast-hide-mobile" style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 9, color: C.textMut, fontFamily: F.sans }}>
             <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.green }} />
-            Drafts saved automatically
+            Local drafts + Convex matter saves
           </div>
         }
       />
@@ -98,7 +150,7 @@ export default function HistoryView() {
               {search&&<span onClick={()=>setSearch("")} style={{fontSize:14,color:C.textMut,cursor:"pointer",lineHeight:1}}>×</span>}
             </div>
             <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:8}}>
-              {[["current", MATTERS.find(m => m.id === matterId)?.label || "Current matter"], ["all", "All matters"]].map(([id, label]) => (
+              {[["current", matter?.label || "Current matter"], ["all", "All matters"]].map(([id, label]) => (
                 <span key={id} onClick={() => setMatterFilter(id)}
                   style={{ fontSize: 9, color: matterFilter === id ? C.blue : C.textMut, background: matterFilter === id ? `${C.blue}18` : "transparent", border: `1px solid ${matterFilter === id ? C.blue : C.border}`, borderRadius: 3, padding: "2px 8px", cursor: "pointer", fontFamily: F.sans, letterSpacing: "0.05em", transition: "all 0.13s" }}>
                   {label}
@@ -126,15 +178,15 @@ export default function HistoryView() {
             ))}
 
             {/* empty */}
-            {drafts!==null && drafts.length===0 && (
+            {drafts!==null && items.length===0 && (
               <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100%",gap:12,padding:"48px 24px",textAlign:"center"}}>
                 <div style={{fontSize:40}}>📝</div>
-                <div style={{fontFamily:F.serif,fontSize:19,fontWeight:600,color:C.textMut}}>No drafts yet</div>
-                <p style={{fontSize:12,color:C.textMut,fontFamily:F.sans,fontWeight:300,lineHeight:1.65,maxWidth:270}}>Drafts generated in the Drafting module are saved here automatically. Generate your first draft to get started.</p>
+                <div style={{fontFamily:F.serif,fontSize:19,fontWeight:600,color:C.textMut}}>No saved work yet</div>
+                <p style={{fontSize:12,color:C.textMut,fontFamily:F.sans,fontWeight:300,lineHeight:1.65,maxWidth:270}}>Drafts auto-save locally. Research, reports, and explicit Save to Matter sync to Convex per matter.</p>
               </div>
             )}
 
-            {drafts!==null && drafts.length>0 && filtered.length===0 && (
+            {drafts!==null && items.length>0 && filtered.length===0 && (
               <div style={{padding:"28px 0",textAlign:"center",color:C.textMut,fontSize:12,fontFamily:F.sans}}>No drafts match your search.</div>
             )}
 
@@ -179,10 +231,12 @@ export default function HistoryView() {
               <div style={{display:"flex",gap:6,flexShrink:0}}>
                 <button onClick={()=>navigator.clipboard?.writeText(sel.content||"")} style={{padding:"5px 11px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:5,color:C.textSec,fontSize:11,cursor:"pointer",fontFamily:F.sans}}>Copy</button>
                 <button onClick={()=>setExportMod(true)} style={{padding:"5px 11px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:5,color:C.textSec,fontSize:11,cursor:"pointer",fontFamily:F.sans}}>↓ Export Word</button>
-                <button onClick={()=>{ if(window.confirm("Delete this draft? This cannot be undone.")) handleDeleteDraft(sel.id); }} disabled={deleting===sel.id}
-                  style={{padding:"5px 11px",background:"transparent",border:`1px solid ${C.redGlow}`,borderRadius:5,color:C.red,fontSize:11,cursor:"pointer",fontFamily:F.sans,opacity:deleting===sel.id?0.5:1}}>
-                  {deleting===sel.id?"…":"🗑 Delete"}
-                </button>
+                {sel.source === "local" && (
+                  <button onClick={()=>{ if(window.confirm("Delete this draft? This cannot be undone.")) handleDeleteDraft(sel.id); }} disabled={deleting===sel.id}
+                    style={{padding:"5px 11px",background:"transparent",border:`1px solid ${C.redGlow}`,borderRadius:5,color:C.red,fontSize:11,cursor:"pointer",fontFamily:F.sans,opacity:deleting===sel.id?0.5:1}}>
+                    {deleting===sel.id?"…":"🗑 Delete"}
+                  </button>
+                )}
               </div>
             </div>
 

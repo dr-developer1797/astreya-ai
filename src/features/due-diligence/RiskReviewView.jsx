@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useMemo } from "react";
 import { C, F } from "@/shared/constants/theme";
 import Btn from "@/shared/ui/Btn";
 import ViewHeader from "@/shared/ui/ViewHeader";
@@ -12,6 +12,7 @@ import { RISK_COLORS, RISK_BG, CONTRACT_TYPES, SAMPLE_CONTRACT } from "@/feature
 import { countWords } from "@/shared/utils/text";
 import { useAbortController } from "@/shared/hooks/useAbortController";
 import { useTimeoutCleanup } from "@/shared/hooks/useTimeoutCleanup";
+import { usePersistReport } from "@/shared/convex/usePersistReport";
 
 const MAX_CONTRACT_CHARS = 100_000;
 
@@ -31,6 +32,27 @@ export default function RiskReviewView() {
   const [inputError, setInputError]     = useState("");
   const [analysisError, setAnalysisError] = useState("");
   const fileRef = useRef(null);
+
+  const riskReportText = useMemo(() => {
+    if (!results) return "";
+    const lines = [
+      `Overall risk score: ${results.overall_score}/10`,
+      `Contract type: ${results.contract_type_detected}`,
+      results.summary,
+      ...(results.risks ?? []).map(
+        (r) => `[${r.risk_level}] ${r.clause_ref}\n${r.issue}\nSuggested: ${r.suggested_revision}`,
+      ),
+    ];
+    return lines.filter(Boolean).join("\n\n");
+  }, [results]);
+
+  usePersistReport({
+    kind: "risk",
+    title: `Risk review — ${results?.contract_type_detected || contractType || "Contract"}`,
+    content: riskReportText,
+    enabled: stage === "results" && Boolean(riskReportText),
+    meta: { results },
+  });
 
   /* ── RUN ANALYSIS ── */
   const runAnalysis = useCallback(async (text, ctype, persp) => {

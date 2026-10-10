@@ -20,6 +20,7 @@ import { countWords } from "@/shared/utils/text";
 import { useFormState } from "@/shared/hooks/useFormState";
 import { useTimeoutCleanup } from "@/shared/hooks/useTimeoutCleanup";
 import { useMatter } from "@/shared/context/MatterContext";
+import { useSaveArtifact } from "@/shared/convex/useSaveArtifact";
 
 const CHECKLIST_ITEMS = [
   "Parties correctly identified",
@@ -32,6 +33,8 @@ const CHECKLIST_ITEMS = [
 
 export default function DraftingView() {
   const { matterId } = useMatter();
+  const { saveArtifact, saving: savingToMatter } = useSaveArtifact();
+  const [matterSaveNotice, setMatterSaveNotice] = useState("");
   const { streaming, text: streamPreview, progress, stream, reset } = useLLMStream();
   const { scheduleTimeout } = useTimeoutCleanup();
   const [stage, setStage]             = useState("select"); // select | intake | generating | editor
@@ -451,7 +454,23 @@ export default function DraftingView() {
             <Btn onClick={() => { setStage("intake"); setDocText(""); setIncomplete(false); }}>← Regenerate</Btn>
             <Btn onClick={() => setExportModal(true)}>↓ Export Word</Btn>
             <Btn onClick={() => navigator.clipboard?.writeText(docText)}>Copy</Btn>
-            <Btn primary>Save to Matter</Btn>
+            <Btn
+              primary
+              disabled={savingToMatter || !docText.trim()}
+              onClick={() => {
+                setMatterSaveNotice("");
+                void saveArtifact({
+                  kind: "draft",
+                  title: dtInfo?.label || "Draft",
+                  content: docText,
+                  meta: { form, notes, docType, incomplete },
+                })
+                  .then(() => setMatterSaveNotice("Saved to active matter."))
+                  .catch(() => {});
+              }}
+            >
+              {savingToMatter ? "Saving…" : "Save to Matter"}
+            </Btn>
           </>
         }
       />
@@ -463,6 +482,11 @@ export default function DraftingView() {
           {incomplete && (
             <div role="status" style={{marginBottom:12,padding:"9px 13px",background:`${C.amber}0E`,border:`1px solid ${C.amber}33`,borderRadius:6,fontSize:11,color:C.amber,fontFamily:F.sans,lineHeight:1.55}}>
               Generation stopped before a signature block. Use Continue drafting to finish the remaining clauses.
+            </div>
+          )}
+          {matterSaveNotice && (
+            <div role="status" style={{marginBottom:12,padding:"9px 13px",background:`${C.green}0E`,border:`1px solid ${C.green}33`,borderRadius:6,fontSize:11,color:C.green,fontFamily:F.sans,lineHeight:1.55}}>
+              {matterSaveNotice}
             </div>
           )}
           {saveWarning && (

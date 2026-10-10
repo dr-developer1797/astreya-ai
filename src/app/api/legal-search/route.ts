@@ -1,10 +1,18 @@
 import { guardApiRequest } from "@/shared/api/guard";
 import { logApiEvent } from "@/shared/api/log";
+import {
+  getLegalSearchCached,
+  legalSearchCacheKey,
+  setLegalSearchCache,
+} from "./cache";
+
+export const maxDuration = 60;
 
 const IK_BASE = "https://api.indiankanoon.org";
 const MAX_QUERY_LENGTH = 500;
-const SEARCH_TIMEOUT_MS = 15_000;
-const DOC_TIMEOUT_MS = 20_000;
+const SEARCH_TIMEOUT_MS = 12_000;
+const DOC_TIMEOUT_MS = 8_000;
+const ENRICHMENT_BUDGET_MS = 6_000;
 
 // Indian Kanoon ranks an unfiltered query by raw keyword overlap, which buries the leading
 // authorities under near-identical district-level petitions. Scoping each tier to a doctype
@@ -291,18 +299,10 @@ async function searchTier(
     .slice(0, tier.take);
 }
 
-const CITATION_BLOCK_RE = /<h3[^>]*class="doc_citations"[^>]*>([\s\S]*?)<\/h3>/i;
-
 function formatReporterCitation(raw: string): string {
   const cleaned = raw.replace(/^equivalent citations:\s*/i, "").trim();
   if (!cleaned) return "";
   return cleaned.split(/\s*,\s*/).filter(Boolean).slice(0, 3).join(", ");
-}
-
-function extractCitationFromDocHtml(docHtml: string): string {
-  const match = docHtml.match(CITATION_BLOCK_RE);
-  if (!match) return "";
-  return formatReporterCitation(toPlainText(match[1]));
 }
 
 function extractCitationFromMeta(payload: Record<string, unknown>): string {
@@ -329,23 +329,9 @@ async function fetchDocMetaCitation(id: number, apiKey: string): Promise<string>
   return extractCitationFromMeta(payload);
 }
 
-async function fetchDocHtmlCitation(id: number, apiKey: string): Promise<string> {
-  const payload = (await ikPost(`/doc/${id}/`, new URLSearchParams(), apiKey, DOC_TIMEOUT_MS)) as {
-    doc?: unknown;
-  };
-  if (typeof payload.doc !== "string") return "";
-  return extractCitationFromDocHtml(payload.doc);
-}
-
 async function fetchCitation(id: number, apiKey: string): Promise<string> {
   try {
-    const fromMeta = await fetchDocMetaCitation(id, apiKey);
-    if (fromMeta) return fromMeta;
-  } catch {
-    /* fall through to doc HTML */
-  }
-  try {
-    return await fetchDocHtmlCitation(id, apiKey);
+    return await fetchDocMetaCitation(id, apiKey);
   } catch {
     return "";
   }
@@ -398,6 +384,13 @@ export async function POST(req: Request) {
 
   const queries = normalizeQuery(query);
   const page = normalizePage(payload.page);
+  const enrich = payload.enrich !== false;
+  const cacheKey = legalSearchCacheKey(queries.search, page, enrich);
+  const cached = getLegalSearchCached(cacheKey);
+  if (cached) {
+    return Response.json(cached);
+  }
+
   const settled = await Promise.allSettled(
     TIERS.map((tier) => searchTier(queries, tier, page, apiKey)),
   );
@@ -440,7 +433,8 @@ export async function POST(req: Request) {
   // Statutes lead so the model states the governing provision before reasoning from case law.
   const sources: Source[] = [...statutes, ...judgments];
 
-  if (payload.enrich !== false && sources.length > 0) {
+  if (enrich && sources.length > 0) {
+    const enrichDeadline = Date.now() + ENRICHMENT_BUDGET_MS;
     const targets = [statutes[0], ...judgments]
       .filter((s): s is Source => Boolean(s))
       .slice(0, CITATION_LOOKUPS);
@@ -450,6 +444,7 @@ export async function POST(req: Request) {
 
     await Promise.all(
       targets.map(async (source) => {
+        if (Date.now() > enrichDeadline) return;
         const jobs: Promise<void>[] = [
           fetchCitation(source.id, apiKey).then((citation) => {
             if (citation) source.citation = citation;
@@ -457,7 +452,7 @@ export async function POST(req: Request) {
         ];
 
         const fragmentQuery = fragmentTargets.get(source.id);
-        if (fragmentQuery) {
+        if (fragmentQuery && Date.now() <= enrichDeadline) {
           jobs.push(
             fetchDocFragment(source.id, fragmentQuery, apiKey).then((fragment) => {
               if (fragment) source.fullText = fragment;
@@ -476,10 +471,13 @@ export async function POST(req: Request) {
     degraded: failed > 0,
   });
 
-  return Response.json({
+  const responseBody = {
     sources,
     configured: true,
     degraded: failed > 0,
     normalizedQuery: queries.search,
-  });
+  };
+  setLegalSearchCache(cacheKey, responseBody);
+
+  return Response.json(responseBody);
 }

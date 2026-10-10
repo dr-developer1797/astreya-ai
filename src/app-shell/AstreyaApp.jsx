@@ -8,8 +8,8 @@ import { C, F } from "@/shared/constants/theme";
 import { FONT_IMPORT } from "@/shared/styles/fontImport";
 import { NAV } from "@/shared/constants/nav";
 import { NAV_ROUTES, navIdFromPath } from "@/shared/constants/routes";
-import { MATTERS } from "@/shared/constants/matters";
-import { MatterProvider, useMatter } from "@/shared/context/MatterContext";
+import { useMatter } from "@/shared/context/MatterContext";
+import { useWorkspace } from "@/shared/convex/WorkspaceProvider";
 import { useViewport, ViewportContext } from "@/shared/hooks/useViewport";
 
 function AstreyaShellInner({ children }) {
@@ -18,7 +18,14 @@ function AstreyaShellInner({ children }) {
   const pathname = usePathname();
   const router = useRouter();
   const nav = navIdFromPath(pathname);
-  const { matterId, setMatterId, matter: m } = useMatter();
+  const { matterId, setMatterId, matter: m, matters } = useMatter();
+  const { displayName } = useWorkspace();
+  const profileInitials = (displayName || "AU")
+    .split(/\s+/)
+    .map((w) => w[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
   const [mOpen, setMOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -122,12 +129,12 @@ function AstreyaShellInner({ children }) {
             </div>
             {mOpen&&(
               <div style={{marginTop:3,background:C.bgCard,border:`1px solid ${C.border}`,borderRadius:6,overflow:"hidden",animation:"fadeUp 0.15s ease"}}>
-                {MATTERS.map(x=>(
-                  <div key={x.id} onClick={()=>{setMatterId(x.id);setMOpen(false);}}
-                    style={{padding:"8px 11px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,background:x.id===matterId?C.redFaint:"transparent",transition:"background 0.1s"}}
-                    onMouseEnter={e=>{if(x.id!==matterId)e.currentTarget.style.background=C.bgHover;}}
-                    onMouseLeave={e=>{if(x.id!==matterId)e.currentTarget.style.background="transparent";}}>
-                    <div style={{fontSize:9,color:x.id===matterId?C.red:C.textMut,fontWeight:600,letterSpacing:"0.08em"}}>{x.code}</div>
+                {matters.map(x=>(
+                  <div key={x._id} onClick={()=>{void setMatterId(x._id);setMOpen(false);}}
+                    style={{padding:"8px 11px",cursor:"pointer",borderBottom:`1px solid ${C.border}`,background:x._id===matterId?C.redFaint:"transparent",transition:"background 0.1s"}}
+                    onMouseEnter={e=>{if(x._id!==matterId)e.currentTarget.style.background=C.bgHover;}}
+                    onMouseLeave={e=>{if(x._id!==matterId)e.currentTarget.style.background="transparent";}}>
+                    <div style={{fontSize:9,color:x._id===matterId?C.red:C.textMut,fontWeight:600,letterSpacing:"0.08em"}}>{x.code}</div>
                     <div style={{fontSize:11,color:C.textPri,marginTop:1}}>{x.label}</div>
                     <div style={{fontSize:9,color:C.textMut,marginTop:1}}>{x.type}</div>
                   </div>
@@ -157,11 +164,11 @@ function AstreyaShellInner({ children }) {
 
         <div style={{padding:(collapsed && !isMobile)?"10px 0":"12px 13px",borderTop:`1px solid ${C.border}`,flexShrink:0}}>
           <div style={{display:"flex",alignItems:"center",gap:(collapsed && !isMobile)?0:8,justifyContent:(collapsed && !isMobile)?"center":"flex-start"}}>
-            <div style={{width:26,height:26,borderRadius:"50%",background:"#1E2030",border:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:C.textSec,fontWeight:600,flexShrink:0}}>HG</div>
+            <div style={{width:26,height:26,borderRadius:"50%",background:"#1E2030",border:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:C.textSec,fontWeight:600,flexShrink:0}}>{profileInitials}</div>
             {(!collapsed || isMobile) && (
               <div style={{animation:"fadeUp 0.18s ease",overflow:"hidden"}}>
-                <div style={{fontSize:11,color:C.textPri,fontWeight:500,whiteSpace:"nowrap"}}>Harold Gunderson</div>
-                <div style={{fontSize:9,color:C.textMut,whiteSpace:"nowrap"}}>Senior Associate</div>
+                <div style={{fontSize:11,color:C.textPri,fontWeight:500,whiteSpace:"nowrap"}}>{displayName}</div>
+                <div style={{fontSize:9,color:C.textMut,whiteSpace:"nowrap"}}>Clerk sign-in coming soon</div>
               </div>
             )}
           </div>
@@ -226,9 +233,5 @@ function AstreyaShellInner({ children }) {
 }
 
 export default function AstreyaApp({ children }) {
-  return (
-    <MatterProvider>
-      <AstreyaShellInner>{children}</AstreyaShellInner>
-    </MatterProvider>
-  );
+  return <AstreyaShellInner>{children}</AstreyaShellInner>;
 }

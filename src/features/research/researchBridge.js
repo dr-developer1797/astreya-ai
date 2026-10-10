@@ -4,6 +4,8 @@ import { createResearchAdapter } from "@/features/research/createResearchAdapter
 export const researchBridge = {
   handlers: {},
   demoText: null,
+  focusMessage: null,
+  saveFocusedAnswer: null,
   takeDemoText() {
     const text = this.demoText;
     this.demoText = null;

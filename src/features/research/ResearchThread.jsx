@@ -9,7 +9,9 @@ import {
   MessagePrimitive,
   ThreadPrimitive,
   useAui,
+  useAuiState,
 } from "@assistant-ui/react";
+import { researchBridge } from "@/features/research/researchBridge";
 import { C, F } from "@/shared/constants/theme";
 import Btn from "@/shared/ui/Btn";
 import Markdown from "@/shared/ui/Markdown";
@@ -53,9 +55,28 @@ function UserMessage() {
   );
 }
 
-function AssistantMessage({ ikLoading }) {
+function AssistantMessage({ ikLoading, focusedMessageId }) {
+  const messageId = useAuiState((s) => s.message.id);
+  const isFocused = useAuiState((s) => {
+    const assistants = s.thread.messages.filter((m) => m.role === "assistant");
+    const lastId = assistants[assistants.length - 1]?.id;
+    const active = focusedMessageId ?? lastId;
+    return active === s.message.id;
+  });
   return (
-    <MessagePrimitive.Root style={{ marginBottom: 20, animation: "fadeUp 0.3s ease" }}>
+    <MessagePrimitive.Root
+      style={{
+        marginBottom: 20,
+        animation: "fadeUp 0.3s ease",
+        outline: "none",
+        borderRadius: 8,
+        boxShadow: isFocused ? `inset 0 0 0 1px ${C.redGlow}` : "none",
+        cursor: "pointer",
+      }}
+      onClick={() => {
+        researchBridge.focusMessage?.(messageId);
+      }}
+    >
       <div style={{ display: "flex", gap: 12 }}>
         <Image
           src="/astreya-logo-dark.png"
@@ -124,7 +145,15 @@ function AssistantMessage({ ikLoading }) {
             <ActionBarPrimitive.Reload asChild>
               <Btn>Regenerate</Btn>
             </ActionBarPrimitive.Reload>
-            <Btn>Save to Matter</Btn>
+            <Btn
+              onClick={(e) => {
+                e.stopPropagation();
+                researchBridge.focusMessage?.(messageId);
+                researchBridge.saveFocusedAnswer?.();
+              }}
+            >
+              Save to Matter
+            </Btn>
           </ActionBarPrimitive.Root>
         </div>
       </div>
@@ -265,7 +294,7 @@ function Composer({ tags = ["CrPC", "BNS", "IBC", "DPDP"] }) {
   );
 }
 
-export default function ResearchThread({ ikLoading, onClear }) {
+export default function ResearchThread({ ikLoading, onClear, focusedMessageId }) {
   return (
     <ThreadPrimitive.Root
       style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", ["--thread-max-width"]: "680px" }}
@@ -282,7 +311,7 @@ export default function ResearchThread({ ikLoading, onClear }) {
             message.role === "user" ? (
               <UserMessage />
             ) : (
-              <AssistantMessage ikLoading={ikLoading} />
+              <AssistantMessage ikLoading={ikLoading} focusedMessageId={focusedMessageId} />
             )
           }
         </ThreadPrimitive.Messages>

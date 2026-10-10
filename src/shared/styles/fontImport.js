@@ -13,7 +13,13 @@ export const FONT_IMPORT = `
   @keyframes blink   { 0%,100%{opacity:1;} 50%{opacity:0;} }
   @keyframes slideUp { from { transform: translateY(100%); opacity: 0.85; } to { transform: translateY(0); opacity: 1; } }
 
-  .ast-root { height: 100vh; height: 100dvh; overflow: hidden; }
+  .ast-root {
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+    /* Inline px type is used throughout; a light root zoom is the safest readable bump. */
+    zoom: 1.12;
+  }
   .ast-main-stack { min-width: 0; }
   .ast-mobile-top { display: none; }
   .ast-bottom-nav { display: none; }

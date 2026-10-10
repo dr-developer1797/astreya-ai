@@ -43,11 +43,19 @@ export function createResearchAdapter({ getHandlers, getDemoText }) {
         handlers.onDemoStart?.();
         let acc = "";
         try {
+          const demoMeta = {
+            ikSources: [],
+            ikGrounded: true,
+            ikError: "",
+          };
           for (let i = 0; i < demoText.length; i++) {
             if (abortSignal?.aborted) throw createAbortError();
             acc += demoText[i];
             if (i % 4 === 0 || i === demoText.length - 1) {
-              yield { content: [{ type: "text", text: acc }] };
+              yield {
+                content: [{ type: "text", text: acc }],
+                metadata: { custom: demoMeta },
+              };
               await delay(8, abortSignal);
             }
           }
@@ -64,24 +72,35 @@ export function createResearchAdapter({ getHandlers, getDemoText }) {
       handlers.onIkStart?.(lastUser.content);
 
       let ikDocs = [];
+      let ikWarning = "";
       try {
         const ik = await fetchIkSources(lastUser.content, { signal: abortSignal });
         ikDocs = ik.sources;
+        ikWarning = ik.warning || "";
         handlers.onIkResult?.({
           sources: ikDocs,
           grounded: ikDocs.length > 0,
           error: ik.warning,
+          messageId: lastUser.id,
         });
       } catch (err) {
         if (isAbortError(err) || abortSignal?.aborted) throw createAbortError();
+        ikWarning = `IndianKanoon unavailable (${err.message}) — answering without retrieved authority.`;
         handlers.onIkResult?.({
           sources: [],
           grounded: false,
-          error: `IndianKanoon unavailable (${err.message}) — answering without retrieved authority.`,
+          error: ikWarning,
+          messageId: lastUser.id,
         });
       } finally {
         handlers.onIkDone?.();
       }
+
+      const sourceMeta = {
+        ikSources: ikDocs,
+        ikGrounded: ikDocs.length > 0,
+        ikError: ikWarning,
+      };
 
       if (abortSignal?.aborted) throw createAbortError();
 
@@ -126,7 +145,10 @@ export function createResearchAdapter({ getHandlers, getDemoText }) {
             const before = full.length;
             consumeLine(line);
             if (full.length > before) {
-              yield { content: [{ type: "text", text: full }] };
+              yield {
+                content: [{ type: "text", text: full }],
+                metadata: { custom: sourceMeta },
+              };
             }
           }
         }
@@ -136,7 +158,10 @@ export function createResearchAdapter({ getHandlers, getDemoText }) {
             const before = full.length;
             consumeLine(line);
             if (full.length > before) {
-              yield { content: [{ type: "text", text: full }] };
+              yield {
+                content: [{ type: "text", text: full }],
+                metadata: { custom: sourceMeta },
+              };
             }
           }
         }
