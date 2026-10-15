@@ -37,3 +37,7 @@ enable it for Production and Preview, then redeploy. Add
 
 Do not prefix either key with `NEXT_PUBLIC_`; that would expose it in the client
 bundle.
+
+For Sentry, set `NEXT_PUBLIC_SENTRY_DSN` (the public DSN from the `astreya-ai`
+project) and `SENTRY_AUTH_TOKEN` (an organization auth token with project
+releases write access) so production errors and source maps upload on build.
