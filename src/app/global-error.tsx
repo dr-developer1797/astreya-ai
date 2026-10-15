@@ -1,7 +1,6 @@
 "use client";
 
 import * as Sentry from "@sentry/nextjs";
-import NextError from "next/error";
 import { useEffect } from "react";
 
 export default function GlobalError({
@@ -16,7 +15,8 @@ export default function GlobalError({
   return (
     <html>
       <body>
-        <NextError statusCode={0} />
+        <h1>Something went wrong</h1>
+        <p>An unexpected error occurred. Please try again.</p>
       </body>
     </html>
   );
