@@ -509,11 +509,13 @@ export default function RiskReviewView() {
             )}
           </div>
 
-          {/* disclaimer */}
+          {/* disclaimer — full Terms/Privacy live on astreya.ai */}
           <div style={{padding:"10px 13px",borderTop:`1px solid ${C.border}`}}>
             <div style={{padding:"9px 10px",background:`${C.amber}0E`,border:`1px solid ${C.amber}33`,borderRadius:6}}>
-              <div style={{fontSize:9,color:C.amber,fontWeight:600,letterSpacing:"0.08em",marginBottom:3}}>REMINDER</div>
-              <p style={{fontSize:10,color:C.textMut,lineHeight:1.5}}>AI risk analysis is preliminary. Consult a qualified advocate before acting on this report.</p>
+              <div style={{fontSize:9,color:C.amber,fontWeight:600,letterSpacing:"0.08em",marginBottom:3}}>NOT LEGAL ADVICE</div>
+              <p style={{fontSize:10,color:C.textMut,lineHeight:1.5}}>
+                Astreya is an AI workspace, not a law firm. This risk analysis is preliminary and not legal advice. Verify with a qualified advocate before acting.
+              </p>
             </div>
           </div>
         </div>

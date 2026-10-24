@@ -8,9 +8,10 @@ import { C, F } from "@/shared/constants/theme";
 import { FONT_IMPORT } from "@/shared/styles/fontImport";
 import { NAV } from "@/shared/constants/nav";
 import { NAV_ROUTES, navIdFromPath } from "@/shared/constants/routes";
+import { UserButton } from "@clerk/nextjs";
 import { useMatter } from "@/shared/context/MatterContext";
-import { useWorkspace } from "@/shared/convex/WorkspaceProvider";
 import { useViewport, ViewportContext } from "@/shared/hooks/useViewport";
+import ProductDisclaimer from "@/shared/legal/ProductDisclaimer";
 
 function AstreyaShellInner({ children }) {
   const viewport = useViewport();
@@ -19,13 +20,6 @@ function AstreyaShellInner({ children }) {
   const router = useRouter();
   const nav = navIdFromPath(pathname);
   const { matterId, setMatterId, matter: m, matters } = useMatter();
-  const { displayName } = useWorkspace();
-  const profileInitials = (displayName || "AU")
-    .split(/\s+/)
-    .map((w) => w[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
   const [mOpen, setMOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -163,14 +157,8 @@ function AstreyaShellInner({ children }) {
         </nav>
 
         <div style={{padding:(collapsed && !isMobile)?"10px 0":"12px 13px",borderTop:`1px solid ${C.border}`,flexShrink:0}}>
-          <div style={{display:"flex",alignItems:"center",gap:(collapsed && !isMobile)?0:8,justifyContent:(collapsed && !isMobile)?"center":"flex-start"}}>
-            <div style={{width:26,height:26,borderRadius:"50%",background:"#1E2030",border:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,color:C.textSec,fontWeight:600,flexShrink:0}}>{profileInitials}</div>
-            {(!collapsed || isMobile) && (
-              <div style={{animation:"fadeUp 0.18s ease",overflow:"hidden"}}>
-                <div style={{fontSize:11,color:C.textPri,fontWeight:500,whiteSpace:"nowrap"}}>{displayName}</div>
-                <div style={{fontSize:9,color:C.textMut,whiteSpace:"nowrap"}}>Clerk sign-in coming soon</div>
-              </div>
-            )}
+          <div style={{display:"flex",alignItems:"center",gap:8,justifyContent:(collapsed && !isMobile)?"center":"flex-start"}}>
+            <UserButton />
           </div>
           {(!collapsed || isMobile) && (
             <div title="Gemma 4 served securely through Google AI Studio"
@@ -179,6 +167,7 @@ function AstreyaShellInner({ children }) {
               <span style={{ fontSize:9, color:C.textMut, fontFamily:F.sans, letterSpacing:"0.08em" }}>AI STUDIO · GEMMA 4</span>
             </div>
           )}
+          {(!collapsed || isMobile) && <ProductDisclaimer />}
         </div>
       </div>
 
